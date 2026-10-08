@@ -1,9 +1,11 @@
 """The negative-control scale is confined to a simulator-owned process wrapper."""
+import csv
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import imageio.v2 as imageio
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -65,3 +67,27 @@ def test_default_start_is_gantry_for_a_real_policy_run(tmp_path: Path) -> None:
     result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=45,
                             env={**os.environ, "MUJOCO_GL": "egl"})
     assert "START mode=gantry " in result.stdout, result.stdout + result.stderr
+
+
+def test_live_perception_feeds_the_real_deploy_pipeline_without_blocking_physics(tmp_path: Path) -> None:
+    # Given the Base policy with a short schedule, when run with
+    # --height_scan perception (todo 16), then the live renderer thread
+    # produces frames near its 30 Hz target, the real odometry/height_map
+    # pipeline runs inside the controller subprocess (scan_* columns appear
+    # in its CSV), and the harness still completes and exits cleanly.
+    command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
+               "--policy", "base", "--height_scan", "perception", "--schedule", "tests/hold_schedule.yaml",
+               "--timeout", "5", "--fps", "10",
+               "--csv", str(tmp_path / "live.csv"), "--video", str(tmp_path / "live.mp4")]
+    result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=60,
+                            env={**os.environ, "MUJOCO_GL": "egl"})
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "RESULT: PASS" in result.stdout
+    rate_line = next(line for line in result.stdout.splitlines() if line.startswith("PERCEPTION_RENDER_RATE"))
+    achieved = float(rate_line.split("achieved_hz=")[1].split()[0])
+    assert achieved > 15.0  # well below the 30 Hz target still proves the thread ran, not stalled
+    with (tmp_path / "live.csv").open() as stream:
+        header = next(csv.reader(stream))
+    assert sum(name.startswith("scan_") for name in header) == 231
+    with imageio.get_reader(str(tmp_path / "live.mp4")) as reader:
+        assert reader.count_frames() == 50

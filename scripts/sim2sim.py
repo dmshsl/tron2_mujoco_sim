@@ -21,6 +21,7 @@ import mujoco
 import numpy as np
 
 from tron2_sim.core import SimCore
+from tron2_sim.height_scan_perception import PerceptionRenderer, SharedPose
 from tron2_sim.rendering import OffscreenRenderer
 from tron2_sim.start_conditions import GantrySupport, PolicyProgress, ground_start, wheel_bottoms
 from tron2_sim.variants.wf_payload import build
@@ -36,7 +37,9 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=30)
-    parser.add_argument("--height_scan", choices=["gt"], default="gt")
+    parser.add_argument("--height_scan", choices=["gt", "perception"], default="gt")
+    parser.add_argument("--render_fps", type=float, default=30.0,
+                        help="Target rate for the live perception depth renderer (--height_scan perception)")
     parser.add_argument("--start", choices=["ground", "gantry"],
                         help="Default: gantry for a real --policy run (the real-robot-standard start - "
                              "a crane strap holds the robot until the stand-up policy exists, task 23 "
@@ -56,9 +59,12 @@ def main() -> None:
     if args.force_action_scale is not None and (
             not np.isfinite(args.force_action_scale) or args.force_action_scale <= 0 or args.controller_command):
         parser.error("force_action_scale must be positive/finite and requires the policy controller")
+    if args.render_fps <= 0:
+        parser.error("render_fps must be positive")
     os.environ["ROBOT_IP"] = "127.0.0.1"
     scan_path = Path(f"/tmp/tron2-gt-{os.getpid()}.bin")
     os.environ["TRON2_GT_SCAN_PATH"] = str(scan_path)
+    perception_scan_path = Path(f"/tmp/tron2-perception-{os.getpid()}.bin")
     for path in (args.csv, args.video):
         path.parent.mkdir(parents=True, exist_ok=True)
     command = shlex.split(args.controller_command) if args.controller_command else [
@@ -81,17 +87,46 @@ def main() -> None:
           flush=True)
     env = dict(os.environ)
     env["PYTHONPATH"] = str(SIM) + os.pathsep + env.get("PYTHONPATH", "")
-    env["TRON2_HEIGHT_SCAN_FACTORY"] = "tron2_sim.height_scan_gt:create_provider"
+    perception = args.height_scan == "perception"
+    if perception:
+        env["TRON2_HEIGHT_SCAN_FACTORY"] = "tron2_sim.height_scan_perception:create_provider"
+        env["TRON2_PERCEPTION_SCAN_PATH"] = str(perception_scan_path)
+    else:
+        env["TRON2_HEIGHT_SCAN_FACTORY"] = "tron2_sim.height_scan_gt:create_provider"
+    render_thread = None
+    if perception:
+        shared_pose = SharedPose(core.model.nq)
+        shared_pose.publish(core.data.qpos, core.data.time)
+        render_thread = PerceptionRenderer(core.model, shared_pose, perception_scan_path, args.render_fps)
+        render_thread.warm_up()  # absorb the one-time EGL/shader cold-start cost before the real-time loop
+        render_thread.start()
     try:
         with subprocess.Popen(command, cwd=SIM, env=env, start_new_session=True) as controller:
+            if perception:
+                try:
+                    cpus = sorted(os.sched_getaffinity(0))
+                    if len(cpus) >= 2:
+                        half = len(cpus) // 2
+                        os.sched_setaffinity(0, set(cpus[:half]))
+                        os.sched_setaffinity(controller.pid, set(cpus[half:]))
+                        print(f"CPU_AFFINITY main_and_renderer={cpus[:half]} controller={cpus[half:]}", flush=True)
+                    else:
+                        print(f"CPU_AFFINITY skipped: only {len(cpus)} CPU(s) available", flush=True)
+                except (AttributeError, OSError) as error:
+                    print(f"CPU_AFFINITY skipped: {error}", flush=True)
             try:
-                with ExitStack() as resources, OffscreenRenderer(core.model) as renderer, imageio.get_writer(
+                with ExitStack() as resources, imageio.get_writer(
                     str(args.video), fps=args.fps, codec="libx264", macro_block_size=1
                 ) as video, args.csv.with_suffix(".sim.csv").open("w") as stream:
                     writer = csv.writer(stream)
                     writer.writerow(["sim_time", "base_x", "base_y", "base_z", "qw", "qx", "qy", "qz",
                                      "vx", "vy", "vz", "wz", "wall_time", "controller_alive",
                                      "controller_t", "policy_t", "gantry_force", "gantry_released"])
+                    gt_writer, gt_stream, next_gt_log = None, None, 0.
+                    if perception:
+                        gt_stream = resources.enter_context(args.csv.with_suffix(".gtscan.csv").open("w", newline=""))
+                        gt_writer = csv.writer(gt_stream)
+                        gt_writer.writerow(["sim_time", "policy_t"] + [f"gt_scan_{i}" for i in range(231)])
                     # Publish an unchanged measured pose until the real SDK command arrives.
                     deadline = time.monotonic() + 15.
                     while not any(core.channels[0].cmd["kp"]):
@@ -105,6 +140,8 @@ def main() -> None:
                             channel.publish(core.data)
                         core.modules[0].next_scan = 0.
                         core.modules[0].on_publish(core)
+                        if perception:
+                            shared_pose.publish(core.data.qpos, core.data.time)
                         time.sleep(.01)
                     start = time.monotonic()
                     progress = None if args.controller_command else PolicyProgress(
@@ -131,6 +168,13 @@ def main() -> None:
                             force = 0. if support is None else support.apply(
                                 core.data, policy_started or failure is not None)
                             core._tick()
+                            if perception:
+                                shared_pose.publish(core.data.qpos, core.data.time)
+                                if gt_writer is not None and core.data.time + 1e-9 >= next_gt_log:
+                                    gt_writer.writerow([core.data.time,
+                                                       -1. if progress is None else progress.policy_t,
+                                                       *core.modules[0].provider.get_scan()])
+                                    next_gt_log = float(core.data.time) + .02
                             writer.writerow([core.data.time, *core.data.qpos[:7], *core.data.qvel[:3],
                                              core.data.qvel[5], time.monotonic() - start, int(failure is None),
                                              -1. if progress is None else progress.controller_t,
@@ -144,11 +188,17 @@ def main() -> None:
                             raise FloatingPointError("Non-finite MuJoCo state")
                     print(f"SIM2SIM frames={len(poses)} sim_s={core.data.time:.3f} "
                           f"wall_s={time.monotonic()-start:.3f}", flush=True)
+                    if render_thread is not None:
+                        render_thread.stop()
+                        print(f"PERCEPTION_RENDER_RATE achieved_hz={render_thread.achieved_fps:.2f} "
+                              f"target_hz={args.render_fps:.2f} frames={render_thread.rendered} "
+                              f"skipped_ticks={render_thread.skipped_ticks}", flush=True)
                     render_data = mujoco.MjData(core.model)
-                    for pose in poses:
-                        render_data.qpos[:] = pose
-                        mujoco.mj_forward(core.model, render_data)
-                        video.append_data(renderer.rgb(render_data))
+                    with OffscreenRenderer(core.model) as renderer:
+                        for pose in poses:
+                            render_data.qpos[:] = pose
+                            mujoco.mj_forward(core.model, render_data)
+                            video.append_data(renderer.rgb(render_data))
                     if failure is not None:
                         raise RuntimeError(failure)
             finally:
@@ -166,7 +216,10 @@ def main() -> None:
                 except ProcessLookupError:
                     pass
     finally:
+        if render_thread is not None:
+            render_thread.stop()  # idempotent if already stopped above; guards early-failure exits
         scan_path.unlink(missing_ok=True)
+        perception_scan_path.unlink(missing_ok=True)
     print("RESULT: PASS (transport/render harness only; policy gates belong to task 12)", flush=True)
 
 
