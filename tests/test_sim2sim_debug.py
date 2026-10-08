@@ -1,4 +1,5 @@
 """The negative-control scale is confined to a simulator-owned process wrapper."""
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -45,6 +46,22 @@ def test_controller_exit_keeps_video_but_fails_gate(tmp_path: Path) -> None:
     result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=30)
     assert result.returncode != 0, result.stdout + result.stderr
     assert "unpowered observation" in result.stdout
+    # An explicit --controller-command smoke test still defaults to an unsupported ground start.
+    assert "START mode=ground " in result.stdout
     import imageio.v2 as imageio
     with imageio.get_reader(str(tmp_path / "failed.mp4")) as reader:
         assert reader.count_frames() == 30
+
+
+def test_default_start_is_gantry_for_a_real_policy_run(tmp_path: Path) -> None:
+    # A real --policy run (no --controller-command) is the real-robot-standard
+    # start: held by a crane strap until the policy's first action, matching
+    # the task-23 bring-up ladder, which never powers on a base policy
+    # freestanding. --start is not passed, proving the default resolves this way.
+    command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
+               "--policy", "base_blind", "--height_scan", "gt", "--schedule", "tests/hold_schedule.yaml",
+               "--timeout", "2", "--fps", "10",
+               "--csv", str(tmp_path / "policy.csv"), "--video", str(tmp_path / "policy.mp4")]
+    result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=45,
+                            env={**os.environ, "MUJOCO_GL": "egl"})
+    assert "START mode=gantry " in result.stdout, result.stdout + result.stderr

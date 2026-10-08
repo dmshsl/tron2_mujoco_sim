@@ -279,6 +279,15 @@ MUJOCO_GL=egl uv run --extra sdk python scripts/sim2sim.py \
   --schedule tests/hold_schedule.yaml --timeout 2 --csv /tmp/base.csv --video /tmp/base.mp4
 ```
 
+`--start` defaults to `gantry` for a real `--policy` run (a crane strap holds
+the robot upright until the policy's first action, then releases and never
+re-engages) — matching the real-robot bring-up ladder, which never powers on
+a Base/BaseBlind policy freestanding. It defaults to `ground` whenever
+`--controller-command` is used (SDK/transport smoke tests), and `ground` is
+always selectable explicitly to measure the unsupported crouch power-on
+(task-12 evidence: the trained crouch pose is not statically stable under
+the controller's ramped-gain hold alone, well before any policy inference).
+
 The tracked canonical `tron2_sim/assets/wf_payload/model.xml` is generated from the
 parent RL URDF and `build_payload_usd.compound()/payload_parts()`, which import
 `make_camera_mount_urdf` geometry. At load time it is materialized at

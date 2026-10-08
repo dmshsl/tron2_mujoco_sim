@@ -37,13 +37,18 @@ def main() -> None:
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--height_scan", choices=["gt"], default="gt")
-    parser.add_argument("--start", choices=["ground", "gantry"], default="ground")
+    parser.add_argument("--start", choices=["ground", "gantry"],
+                        help="Default: gantry for a real --policy run (the real-robot-standard start - "
+                             "a crane strap holds the robot until the stand-up policy exists, task 23 "
+                             "ladder step 1), ground for --controller-command smoke tests")
     parser.add_argument("--force_action_scale", type=float,
                         help="Negative control only: replace position action scales; default off")
     parser.add_argument("--controller-command",
                         help="Explicit command without a shell; receives TRON2_GT_SCAN_PATH")
     parser.add_argument("--controller-python", default=sys.executable)
     args = parser.parse_args()
+    if args.start is None:
+        args.start = "ground" if args.controller_command else "gantry"
     if args.timeout <= 0 or args.fps <= 0 or not args.schedule.is_file():
         parser.error("positive timeout/fps and an existing schedule are required")
     if args.start == "gantry" and args.controller_command:
