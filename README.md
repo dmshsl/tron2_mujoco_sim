@@ -279,12 +279,12 @@ MUJOCO_GL=egl uv run --extra sdk python scripts/sim2sim.py \
   --schedule tests/hold_schedule.yaml --timeout 2 --csv /tmp/base.csv --video /tmp/base.mp4
 ```
 
-The tracked canonical `tron2_sim/assets/wf_payload.xml` is generated from the
+The tracked canonical `tron2_sim/assets/wf_payload/model.xml` is generated from the
 parent RL URDF and `build_payload_usd.compound()/payload_parts()`, which import
 `make_camera_mount_urdf` geometry. At load time it is materialized at
-`robot-description/tron2a/WF_TRON2A_PAYLOAD/xml/robot.xml`, resolving the parent
-RL meshes to absolute paths. That nested-submodule output is generated, not a
-vendor asset edit. No SDK or Isaac is needed to run the generator. Limb and IMU
+`tron2_sim/assets/wf_payload/generated/<terrain>.xml`, resolving the parent
+RL meshes to absolute paths. These runtime outputs are ignored and stay in this
+repository, outside the vendor submodule. No SDK or Isaac is needed to run the generator. Limb and IMU
 inertials are copied from the RL URDF, the 13.73968 kg compound uses `fullinertia`
 about its COM, and all nine payload boxes have separate visual/collision geoms.
 
