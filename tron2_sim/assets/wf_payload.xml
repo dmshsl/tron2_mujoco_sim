@@ -1,0 +1,189 @@
+<mujoco model="wf_payload_rl">
+  <compiler angle="radian" inertiafromgeom="false" fusestatic="false" />
+  <option timestep="0.001" />
+  <visual>
+    <global offwidth="848" offheight="480" />
+  </visual>
+  <default>
+    <light castshadow="false" diffuse="1 1 1" />
+    <camera fovy="60" />
+    <default class="visual">
+      <geom contype="0" conaffinity="0" group="1" type="mesh" density="0" rgba="0.8 0.8 0.8 1.0" />
+    </default>
+    <default class="collision">
+      <geom type="mesh" density="0" rgba="0.8 0.8 0.8 0.3" />
+    </default>
+    <joint damping="0.01" margin="0.0001" solreflimit="0.002 1" />
+    <geom contype="1" conaffinity="1" friction="1.0 0.3 0.3" rgba="0.5 0.6 0.7 0.5" margin="0.001" group="0" solref="0.01 1" />
+    <equality solref="0.001 1" />
+  </default>
+  <asset>
+    <mesh name="base_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/base_Link.STL" />
+    <mesh name="knee_L_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/knee_L_Link.STL" />
+    <mesh name="knee_R_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/knee_R_Link.STL" />
+    <mesh name="proximal_pitch_L_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_pitch_L_Link.STL" />
+    <mesh name="proximal_pitch_R_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_pitch_R_Link.STL" />
+    <mesh name="proximal_roll_L_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_roll_L_Link.STL" />
+    <mesh name="proximal_roll_R_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_roll_R_Link.STL" />
+    <mesh name="proximal_yaw_L_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_yaw_L_Link.STL" />
+    <mesh name="proximal_yaw_R_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/proximal_yaw_R_Link.STL" />
+    <mesh name="wheel_L_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/wheel_L_Link.STL" />
+    <mesh name="wheel_R_Link" file="tron2_rl/exts/bipedal_locomotion/bipedal_locomotion/assets/usd/WF_TRON2A/meshes/wheel_R_Link.STL" />
+    <hfield name="terrain" nrow="61" ncol="61" size="3 3 1 0.1" />
+    <hfield name="west" nrow="2" ncol="2" size="10 23 0.001 0.10000000000000001" />
+    <hfield name="east" nrow="2" ncol="2" size="10 23 0.001 0.10000000000000001" />
+    <hfield name="south" nrow="2" ncol="2" size="3 10 0.001 0.10000000000000001" />
+    <hfield name="north" nrow="2" ncol="2" size="3 10 0.001 0.10000000000000001" />
+  </asset>
+  <worldbody>
+    <light pos="0 -2 5" dir="0 0 -1" directional="true" />
+    <body name="terrain_frame">
+      <geom name="terrain" type="hfield" hfield="terrain" group="5" contype="1" conaffinity="15" rgba="0.45 0.52 0.40 1" />
+    </body>
+    <geom name="west" type="hfield" hfield="west" group="5" pos="-13 0 0" contype="1" conaffinity="15" rgba="0.45 0.52 0.40 1" />
+    <geom name="east" type="hfield" hfield="east" group="5" pos="13 0 0" contype="1" conaffinity="15" rgba="0.45 0.52 0.40 1" />
+    <geom name="south" type="hfield" hfield="south" group="5" pos="0 -13 0" contype="1" conaffinity="15" rgba="0.45 0.52 0.40 1" />
+    <geom name="north" type="hfield" hfield="north" group="5" pos="0 13 0" contype="1" conaffinity="15" rgba="0.45 0.52 0.40 1" />
+    <body name="base_Link" pos="0 0 0.60">
+      <freejoint name="root" />
+      <inertial pos="-0.0016516760215667327 -8.0569562027645527e-05 0.14884619903811447" mass="13.739679999999995" fullinertia="0.19447513637749925 0.2139082654940388 0.12230891762885787 3.3099055355874374e-05 0.0064059620221285762 4.4552534028334428e-05" />
+      <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="base_Link" class="visual" />
+      <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="base_Link" class="collision" />
+      <geom name="rail_side_L_visual" type="box" pos="0 0.122 0.27129999999999999" quat="1 0 0 0" size="0.16200000000000001 0.01 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_side_L_collision" type="box" pos="0 0.122 0.27129999999999999" quat="1 0 0 0" size="0.16200000000000001 0.01 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_side_R_visual" type="box" pos="0 -0.122 0.27129999999999999" quat="1 0 0 0" size="0.16200000000000001 0.01 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_side_R_collision" type="box" pos="0 -0.122 0.27129999999999999" quat="1 0 0 0" size="0.16200000000000001 0.01 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_cross_front_visual" type="box" pos="0.16200000000000001 0 0.27129999999999999" quat="1 0 0 0" size="0.01 0.13200000000000001 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_cross_front_collision" type="box" pos="0.16200000000000001 0 0.27129999999999999" quat="1 0 0 0" size="0.01 0.13200000000000001 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_cross_rear_visual" type="box" pos="-0.16200000000000001 0 0.27129999999999999" quat="1 0 0 0" size="0.01 0.13200000000000001 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="rail_cross_rear_collision" type="box" pos="-0.16200000000000001 0 0.27129999999999999" quat="1 0 0 0" size="0.01 0.13200000000000001 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="thor_body_visual" type="box" pos="0 0 0.30980000000000002" quat="1 0 0 0" size="0.056000000000000001 0.1215 0.028500000000000001" class="visual" rgba="0.15 0.15 0.17 1" />
+      <geom name="thor_body_collision" type="box" pos="0 0 0.30980000000000002" quat="1 0 0 0" size="0.056000000000000001 0.1215 0.028500000000000001" class="collision" rgba="0.15 0.15 0.17 1" />
+      <geom name="leg_front_visual" type="box" pos="0.17261000000000001 0 0.26068999999999998" quat="0.92387918109221301 0 0.38268428076468181 0" size="0.014999999999999999 0.01 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="leg_front_collision" type="box" pos="0.17261000000000001 0 0.26068999999999998" quat="0.92387918109221301 0 0.38268428076468181 0" size="0.014999999999999999 0.01 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="cam_front_body_visual" type="box" pos="0.19241 0 0.24088999999999999" quat="0.65328003412829516 0.27059815299957579 0.2705991469639179 0.65328243376425765" size="0.062 0.012999999999999999 0.014500000000000001" class="visual" rgba="0.15 0.15 0.17 1" />
+      <geom name="cam_front_body_collision" type="box" pos="0.19241 0 0.24088999999999999" quat="0.65328003412829516 0.27059815299957579 0.2705991469639179 0.65328243376425765" size="0.062 0.012999999999999999 0.014500000000000001" class="collision" rgba="0.15 0.15 0.17 1" />
+      <camera name="d455_front" pos="0.19241 0 0.24088999999999999" quat="0.65328293074623967 0.27059794714327662 -0.27059695318334176 -0.65328053110845175" resolution="848 480" sensorsize="848 480" focalpixel="446.80277311912806 432.97146126514167" />
+      <geom name="leg_rear_visual" type="box" pos="-0.17261000000000001 0 0.26068999999999998" quat="0.3826855065625277 0 0.92387867334784901 0" size="0.014999999999999999 0.01 0.01" class="visual" rgba="0.8 0.82 0.85 1" />
+      <geom name="leg_rear_collision" type="box" pos="-0.17261000000000001 0 0.26068999999999998" quat="0.3826855065625277 0 0.92387867334784901 0" size="0.014999999999999999 0.01 0.01" class="collision" rgba="0.8 0.82 0.85 1" />
+      <geom name="cam_rear_body_visual" type="box" pos="-0.19241 0 0.24088999999999999" quat="-0.65328003412829516 -0.27059815299957579 0.2705991469639179 0.65328243376425765" size="0.062 0.012999999999999999 0.014500000000000001" class="visual" rgba="0.15 0.15 0.17 1" />
+      <geom name="cam_rear_body_collision" type="box" pos="-0.19241 0 0.24088999999999999" quat="-0.65328003412829516 -0.27059815299957579 0.2705991469639179 0.65328243376425765" size="0.062 0.012999999999999999 0.014500000000000001" class="collision" rgba="0.15 0.15 0.17 1" />
+      <camera name="d455_rear" pos="-0.19241 0 0.24088999999999999" quat="0.65328293074623967 0.27059794714327662 0.27059695318334176 0.65328053110845175" resolution="848 480" sensorsize="848 480" focalpixel="446.80277311912806 432.97146126514167" />
+      <body name="limx_imu" pos="0. 0. 0." quat="1 0 0 0">
+        <inertial pos="0 0 0" mass="0.01" fullinertia="9.9999999999999995e-07 9.9999999999999995e-07 9.9999999999999995e-07 0 0 0" />
+        <geom pos="0 0 0" quat="1 0 0 0" type="box" size="0.0074999999999999997 0.0074999999999999997 0.002" class="visual" />
+        <site name="base_imu" size="0.002" />
+      </body>
+      <body name="proximal_pitch_L_Link" pos="-0.00044 0.09178 0.05474" quat="1 0 0 0">
+        <inertial pos="-5.22E-03 69.76E-03 -6.08E-03" mass="2.07" fullinertia="0.00415453 0.0029222900000000001 0.0033333899999999999 -1.4e-05 1.8410000000000002e-05 5.1959999999999997e-05" />
+        <joint name="proximal_pitch_L_Joint" type="hinge" axis="0 0.99619 -0.087155" range="-3.14159 2.60054" actuatorfrcrange="-150 150" armature="0.0685894" />
+        <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_pitch_L_Link" class="visual" />
+        <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_pitch_L_Link" class="collision" />
+        <body name="proximal_roll_L_Link" pos="-0.032 0.0758 -0.00663" quat="1 0 0 0">
+          <inertial pos="31.24E-03 0.35E-03 -84.14E-03" mass="1.74" fullinertia="0.0047693299999999996 0.00545584 0.0030531600000000001 -1.172e-05 3.2709999999999997e-05 -2.9459999999999999e-05" />
+          <joint name="proximal_roll_L_Joint" type="hinge" axis="1 0 0" range="-0.261799 3.19395" actuatorfrcrange="-150 150" armature="0.0685894" />
+          <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_roll_L_Link" class="visual" />
+          <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_roll_L_Link" class="collision" />
+          <body name="proximal_yaw_L_Link" pos="0.032 0.0 -0.1374" quat="1 0 0 0">
+            <inertial pos="-2.76E-03 1.64E-03 -111.48E-03" mass="1.56" fullinertia="0.01503966 0.014341410000000001 0.0037578500000000001 -3.8600000000000003e-06 0.00026664000000000001 6.5939999999999995e-05" />
+            <joint name="proximal_yaw_L_Joint" type="hinge" axis="0 0 1" range="-3.66519 1.48353" actuatorfrcrange="-60 60" armature="0.0169834" />
+            <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_yaw_L_Link" class="visual" />
+            <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_yaw_L_Link" class="collision" />
+            <body name="knee_L_Link" pos="0.004 0.032 -0.2126" quat="1 0 0 0">
+              <inertial pos="-2.17E-03 -24.32E-03 -137.39E-03" mass="4.42" fullinertia="0.10528872 0.10654350999999999 0.0055755600000000002 5.13e-06 -0.00091671000000000005 0.00147664" />
+              <joint name="knee_L_Joint" type="hinge" axis="0 1 0" range="-2.61799 0.261799" actuatorfrcrange="-150 150" armature="0.0685894" />
+              <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="knee_L_Link" class="visual" />
+              <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="knee_L_Link" class="collision" />
+              <body name="wheel_L_Link" pos="-0.004 0.013 -0.35" quat="1 0 0 0">
+                <inertial pos="0.54E-03 4.00E-03 0.34E-03" mass="0.75" fullinertia="0.0023228300000000001 0.0044643900000000004 0.0023508800000000001 3.5999999999999999e-07 -2.1350000000000001e-05 1.8e-07" />
+                <joint name="wheel_L_Joint" type="hinge" axis="0 1 0" range="-1.74533e+06 1.74533e+06" actuatorfrcrange="-22 22" armature="0.0110718" />
+                <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="wheel_L_Link" class="visual" />
+                <geom pos="0 0.003 0" quat="0.70710678118654757 0.70710678118654746 0 0" type="cylinder" size="0.1 0.0225" class="collision" />
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="proximal_pitch_R_Link" pos="-0.00044 -0.09178 0.05474" quat="1 0 0 0">
+        <inertial pos="-0.00522 -0.06976 -0.00608" mass="2.07" fullinertia="0.00415453 0.0029222900000000001 0.0033333899999999999 1.4e-05 1.8410000000000002e-05 -5.1959999999999997e-05" />
+        <joint name="proximal_pitch_R_Joint" type="hinge" axis="0 0.99619 0.087155" range="-3.14159 2.60054" actuatorfrcrange="-150 150" armature="0.0685894" />
+        <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_pitch_R_Link" class="visual" />
+        <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_pitch_R_Link" class="collision" />
+        <body name="proximal_roll_R_Link" pos="-0.032 -0.0758 -0.00663" quat="1 0 0 0">
+          <inertial pos="0.03124 -0.00035 -0.08414" mass="1.74" fullinertia="0.0047693299999999996 0.00545584 0.0030531600000000001 1.172e-05 3.2709999999999997e-05 2.9459999999999999e-05" />
+          <joint name="proximal_roll_R_Joint" type="hinge" axis="1 0 0" range="-3.19395 0.261799" actuatorfrcrange="-150 150" armature="0.0685894" />
+          <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_roll_R_Link" class="visual" />
+          <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_roll_R_Link" class="collision" />
+          <body name="proximal_yaw_R_Link" pos="0.032 -0.0 -0.1374" quat="1 0 0 0">
+            <inertial pos="-0.00276 -0.00164 -0.11148" mass="1.56" fullinertia="0.01503966 0.014341410000000001 0.0037578500000000001 3.8600000000000003e-06 0.00026664000000000001 -6.5939999999999995e-05" />
+            <joint name="proximal_yaw_R_Joint" type="hinge" axis="0 0 1" range="-1.48353 3.66519" actuatorfrcrange="-60 60" armature="0.0169834" />
+            <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_yaw_R_Link" class="visual" />
+            <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="proximal_yaw_R_Link" class="collision" />
+            <body name="knee_R_Link" pos="0.004 -0.032 -0.2126" quat="1 0 0 0">
+              <inertial pos="-0.00217 0.02432 -0.13739" mass="4.42" fullinertia="0.10528872 0.10654350999999999 0.0055755600000000002 -5.13e-06 -0.00091671000000000005 -0.00147664" />
+              <joint name="knee_R_Joint" type="hinge" axis="0 1 0" range="-2.61799 0.261799" actuatorfrcrange="-150 150" armature="0.0685894" />
+              <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="knee_R_Link" class="visual" />
+              <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="knee_R_Link" class="collision" />
+              <body name="wheel_R_Link" pos="-0.004 -0.013 -0.35" quat="1 0 0 0">
+                <inertial pos="0.00054 -0.004 0.00034" mass="0.75" fullinertia="0.0023228300000000001 0.0044643900000000004 0.0023508800000000001 -3.5999999999999999e-07 -2.1350000000000001e-05 -1.8e-07" />
+                <joint name="wheel_R_Joint" type="hinge" axis="0 1 0" range="-1.74533e+06 1.74533e+06" actuatorfrcrange="-22 22" armature="0.0110718" />
+                <geom pos="0 0 0" quat="1 0 0 0" type="mesh" mesh="wheel_R_Link" class="visual" />
+                <geom pos="0 -0.003 0" quat="0.70710678118654757 0.70710678118654746 0 0" type="cylinder" size="0.1 0.0225" class="collision" />
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="proximal_pitch_L" joint="proximal_pitch_L_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="proximal_roll_L" joint="proximal_roll_L_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="proximal_yaw_L" joint="proximal_yaw_L_Joint" ctrllimited="true" ctrlrange="-60 60" gear="1" />
+    <motor name="knee_L" joint="knee_L_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="wheel_L" joint="wheel_L_Joint" ctrllimited="true" ctrlrange="-22 22" gear="1" />
+    <motor name="proximal_pitch_R" joint="proximal_pitch_R_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="proximal_roll_R" joint="proximal_roll_R_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="proximal_yaw_R" joint="proximal_yaw_R_Joint" ctrllimited="true" ctrlrange="-60 60" gear="1" />
+    <motor name="knee_R" joint="knee_R_Joint" ctrllimited="true" ctrlrange="-150 150" gear="1" />
+    <motor name="wheel_R" joint="wheel_R_Joint" ctrllimited="true" ctrlrange="-22 22" gear="1" />
+  </actuator>
+  <sensor>
+    <framequat objtype="site" objname="base_imu" name="base_imu_quat" />
+    <gyro site="base_imu" name="base_imu_gyro" />
+    <accelerometer site="base_imu" name="base_imu_acc" />
+    <jointpos joint="proximal_pitch_L_Joint" name="proximal_pitch_L_pos" />
+    <jointpos joint="proximal_roll_L_Joint" name="proximal_roll_L_pos" />
+    <jointpos joint="proximal_yaw_L_Joint" name="proximal_yaw_L_pos" />
+    <jointpos joint="knee_L_Joint" name="knee_L_pos" />
+    <jointpos joint="wheel_L_Joint" name="wheel_L_pos" />
+    <jointpos joint="proximal_pitch_R_Joint" name="proximal_pitch_R_pos" />
+    <jointpos joint="proximal_roll_R_Joint" name="proximal_roll_R_pos" />
+    <jointpos joint="proximal_yaw_R_Joint" name="proximal_yaw_R_pos" />
+    <jointpos joint="knee_R_Joint" name="knee_R_pos" />
+    <jointpos joint="wheel_R_Joint" name="wheel_R_pos" />
+    <jointvel joint="proximal_pitch_L_Joint" name="proximal_pitch_L_vel" />
+    <jointvel joint="proximal_roll_L_Joint" name="proximal_roll_L_vel" />
+    <jointvel joint="proximal_yaw_L_Joint" name="proximal_yaw_L_vel" />
+    <jointvel joint="knee_L_Joint" name="knee_L_vel" />
+    <jointvel joint="wheel_L_Joint" name="wheel_L_vel" />
+    <jointvel joint="proximal_pitch_R_Joint" name="proximal_pitch_R_vel" />
+    <jointvel joint="proximal_roll_R_Joint" name="proximal_roll_R_vel" />
+    <jointvel joint="proximal_yaw_R_Joint" name="proximal_yaw_R_vel" />
+    <jointvel joint="knee_R_Joint" name="knee_R_vel" />
+    <jointvel joint="wheel_R_Joint" name="wheel_R_vel" />
+    <jointactuatorfrc joint="proximal_pitch_L_Joint" name="proximal_pitch_L_frc" />
+    <jointactuatorfrc joint="proximal_roll_L_Joint" name="proximal_roll_L_frc" />
+    <jointactuatorfrc joint="proximal_yaw_L_Joint" name="proximal_yaw_L_frc" />
+    <jointactuatorfrc joint="knee_L_Joint" name="knee_L_frc" />
+    <jointactuatorfrc joint="wheel_L_Joint" name="wheel_L_frc" />
+    <jointactuatorfrc joint="proximal_pitch_R_Joint" name="proximal_pitch_R_frc" />
+    <jointactuatorfrc joint="proximal_roll_R_Joint" name="proximal_roll_R_frc" />
+    <jointactuatorfrc joint="proximal_yaw_R_Joint" name="proximal_yaw_R_frc" />
+    <jointactuatorfrc joint="knee_R_Joint" name="knee_R_frc" />
+    <jointactuatorfrc joint="wheel_R_Joint" name="wheel_R_frc" />
+  </sensor>
+  <keyframe>
+    <key name="default_pose" qpos="0 0 0.59999999999999998 1 0 0 0 0.90000000000000002 0 0 -1.8 0 0.90000000000000002 0 0 -1.8 0" />
+  </keyframe>
+</mujoco>

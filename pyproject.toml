@@ -6,8 +6,11 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
 dependencies = [
+    "imageio>=2.38.0",
+    "imageio-ffmpeg>=0.6.0",
     "mujoco>=3.2.2",
     "pyyaml>=6.0",
+    "scipy>=1.15.3",
 ]
 
 # limxsdk is an opt-in extra because it lives in the limxsdk-lowlevel submodule
@@ -44,6 +47,10 @@ requires-dist = []
 line-length = 120
 extend-exclude = ["robot-description", "limxsdk-lowlevel", "asset_converter"]
 
+[tool.pytest.ini_options]
+addopts = "--disable-plugin-autoload"
+testpaths = ["tests"]
+
 # Pinned explicitly so CI does not drift when ruff changes its defaults.
 # BLE (blind-except) is deliberately not selected: this codebase uses broad
 # `except Exception` at degrade boundaries -- config loading, module attach, SDK
@@ -51,3 +58,12 @@ extend-exclude = ["robot-description", "limxsdk-lowlevel", "asset_converter"]
 # physics thread or escape into a native thread. Every such handler reports.
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+# Isaac must launch before imports; simulator scripts establish sibling import paths/EGL first.
+"scripts/*.py" = ["E402"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]

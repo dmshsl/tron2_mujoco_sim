@@ -30,6 +30,8 @@ def parse_args():
                         help="run without a viewer; physics and I/O pipelines are unchanged")
     parser.add_argument("--duration", type=float, default=None,
                         help="exit automatically after N seconds (default: run until Ctrl+C)")
+    parser.add_argument("--variant", choices=["wf_payload"])
+    parser.add_argument("--terrain", choices=["flat", "slope", "stairs", "rubble"], default="flat")
     cli, _ = parser.parse_known_args()
     return cli
 
@@ -48,11 +50,14 @@ def main():
     signal.signal(signal.SIGTERM, _sigterm_to_interrupt)
     cli = parse_args()
     robot_type = os.getenv("ROBOT_TYPE")
-    base, _family, family_dir = tspec.resolve_robot_type(robot_type, BASE_REGISTRY)
-    print(f"Robot type: {robot_type}")
-
     from tron2_sim.core import SimCore
-    robot_spec = BASE_REGISTRY[base](robot_type, family_dir, cli)
+    if cli.variant == "wf_payload":
+        from tron2_sim.variants.wf_payload import build
+        robot_spec = build(cli.terrain)
+    else:
+        base, _family, family_dir = tspec.resolve_robot_type(robot_type, BASE_REGISTRY)
+        print(f"Robot type: {robot_type}")
+        robot_spec = BASE_REGISTRY[base](robot_type, family_dir, cli)
     SimCore(robot_spec, _SCRIPT_DIR, headless=cli.headless).run(duration=cli.duration)
     # limxsdk/fastdds participants race during interpreter teardown (occasional
     # SIGSEGV after all work is done). Every thread has stopped by now, so exit hard

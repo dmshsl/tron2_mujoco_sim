@@ -262,3 +262,101 @@ them.
 checkout, set `PYTHONUNBUFFERED=1`.
 
 ## 9. Cite and support
+
+## RL payload sim2sim (explicit, simulation-only)
+
+In the parent `tron2` checkout, `wf_payload` is the RL-URDF-derived model,
+not the vendor WF mass model. It preserves WF channel order, actuator names,
+limits, armatures and simulator contact defaults. All endpoints are loopback.
+
+```bash
+uv sync --extra sdk
+uv run python scripts/build_wf_payload.py
+MUJOCO_GL=egl uv run simulator.py --variant wf_payload --terrain flat --headless --duration 2
+MUJOCO_GL=egl uv run python -m pytest tests/test_wf_payload.py -q
+MUJOCO_GL=egl uv run --extra sdk python scripts/sim2sim.py \
+  --variant wf_payload --terrain flat --policy base --height_scan gt \
+  --schedule tests/hold_schedule.yaml --timeout 2 --csv /tmp/base.csv --video /tmp/base.mp4
+```
+
+The tracked canonical `tron2_sim/assets/wf_payload.xml` is generated from the
+parent RL URDF and `build_payload_usd.compound()/payload_parts()`, which import
+`make_camera_mount_urdf` geometry. At load time it is materialized at
+`robot-description/tron2a/WF_TRON2A_PAYLOAD/xml/robot.xml`, resolving the parent
+RL meshes to absolute paths. That nested-submodule output is generated, not a
+vendor asset edit. No SDK or Isaac is needed to run the generator. Limb and IMU
+inertials are copied from the RL URDF, the 13.73968 kg compound uses `fullinertia`
+about its COM, and all nine payload boxes have separate visual/collision geoms.
+
+Terrain exports are committed under `tron2_sim/assets/terrains/`. To regenerate:
+
+```bash
+# From the parent tron2_rl directory; do not bypass the shared lock.
+OMNI_KIT_ACCEPT_EULA=YES flock -w 1800 /tmp/isaac.lock timeout 900 \
+  ./run.sh ../tron2_sim/scripts/export_v22_terrains.py --headless
+```
+
+They contain the actual bordered v22 int16 arrays (seed 42, difficulty 1.0,
+0.1 m horizontal / 0.005 m vertical resolution), plus an Isaac `grid_pattern`
+fixture. Flat is the zero-height hfield equivalent of Isaac's plane. Array axis
+0 is x in Isaac; conversion transposes to MuJoCo y-row/x-column order. The
+static terrain body is in geom group 5; scans enable only that group and use
+`flg_static=1`, `bodyexclude=-1`. They exclude robot, payload and visual geoms.
+
+### GT provider interface for the deploy entry point
+
+`tron2_sim.height_scan_gt.LocalHeightScanProvider` requires only NumPy and the
+Python standard library. Put the parent `tron2_sim/` directory on `sys.path`, then:
+
+```python
+from tron2_sim.height_scan_gt import LocalHeightScanProvider
+provider = LocalHeightScanProvider()
+scan = provider.get_scan()  # or provider(); float32 (231,), already clipped
+```
+
+The harness sets `PYTHONPATH`, `TRON2_GT_SCAN_PATH`, and
+`TRON2_HEIGHT_SCAN_FACTORY=tron2_sim.height_scan_gt:create_provider` for the
+controller child. The factory accepts `(contract, mode)` and its client supports
+deployment's `get_scan(state)` interface. `state.timestamp` must use the local
+monotonic clock; excessive scan/state skew raises rather than using old geometry.
+Without it, the provider uses `/tmp/tron2-height-scan-gt.bin` (the standalone
+simulator's default). A frame contains `struct.Struct('<dd231f')`: monotonic
+wall timestamp, simulation timestamp, 231 values, under `flock`. It is refreshed
+at 50 Hz. The client raises on missing/malformed data or age >0.5 s; callers must
+stop safely rather than substitute a zero scan. Values are
+`clip(base_z - terrain_z - 0.8, -1, 1)`; ray misses are -1. Grid coordinates are
+x=-1..1, y=-0.5..0.5, 0.1 m spacing, yaw-aligned; x varies fastest. The harness
+unlinks its per-process file on exit. The GT interface is simulation-only.
+
+The default harness command runs `tron2_deploy/run_policy.py --autostart
+--robot_ip 127.0.0.1` with policy/schedule/timeout/csv/height_scan arguments.
+Use `--controller-python /path/to/deploy/python` if ONNX dependencies live in a
+different environment. For task-11 transport QA only, replace it with
+`--controller-command '.venv/bin/python scripts/hold_pose.py --timeout 15'`.
+This is a real SDK hold-pose controller, not a balance-policy test. The supplied
+CSV goes to the deploy controller; a sibling `*.sim.csv` always records MuJoCo
+ground truth. Subprocess failure/early exit fails the harness; an isolated process
+group ensures controller descendants are terminated as well. Video frame count
+is `round(timeout * fps)`, with simulation time paced against wall time.
+
+`OffscreenRenderer` provides RGB and optical-axis metric depth (848x480) from
+`d455_front` and `d455_rear`, using independent 87x58 degree focal lengths.
+Third-person RGB is the default video view. EGL must be selected before importing
+MuJoCo. MP4 encoding uses explicit imageio/imageio-ffmpeg dependencies.
+
+### Explicit sim-to-real differences for the task-24 audit
+
+- MuJoCo retains vendor torque limits: 150 Nm pitch/roll/knee, 60 yaw, 22 wheel;
+  these differ from RL training limits and must not be silently treated as aligned.
+- Vendor armatures (0.0685894 / 0.0169834 / 0.0110718), damping 0.01,
+  contact friction (1.0, 0.3, 0.3) and 1 ms timestep are retained. Controller gains
+  come through the SDK; sensor noise, transport latency and actuator delays are
+  not calibrated to hardware. Payload inertia is nominal, without randomization.
+- Heightfields preserve sample heights but cannot represent Isaac's horizontal
+  vertex shifts used to make steep risers vertical (`slope_threshold=0.75`).
+  Stair/rubble edge contacts therefore differ. The obstacle tile spans 6x6 m,
+  surrounded by the exported config's 20 m flat border (also group-5 hfields).
+  Long drives beyond the central tile no longer exercise the named obstacle.
+- Depth is ideal noiseless z-depth, not a D455 sensor model (no stereo holes,
+  USB delay or lens distortion). Hardware IMU extrinsics remain unverified;
+  this model uses the RL URDF IMU transform.
