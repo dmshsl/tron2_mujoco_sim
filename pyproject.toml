@@ -65,5 +65,7 @@ select = ["E", "F", "W", "I", "UP", "B", "RUF"]
 
 [dependency-groups]
 dev = [
+    "limxsdk; platform_machine == 'x86_64'",
+    "limxsdk; platform_machine == 'aarch64'",
     "pytest>=9.1.1",
 ]

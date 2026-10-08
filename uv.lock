@@ -983,6 +983,8 @@ sdk = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "limxsdk", version = "4.0.2", source = { path = "limxsdk-lowlevel/python3/aarch64/limxsdk-4.0.2-py3-none-any.whl" }, marker = "platform_machine == 'aarch64'" },
+    { name = "limxsdk", version = "4.0.2", source = { path = "limxsdk-lowlevel/python3/amd64/limxsdk-4.0.2-py3-none-any.whl" }, marker = "platform_machine == 'x86_64'" },
     { name = "pytest" },
 ]
 
@@ -999,7 +1001,11 @@ requires-dist = [
 provides-extras = ["sdk"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=9.1.1" }]
+dev = [
+    { name = "limxsdk", marker = "platform_machine == 'aarch64'", path = "limxsdk-lowlevel/python3/aarch64/limxsdk-4.0.2-py3-none-any.whl" },
+    { name = "limxsdk", marker = "platform_machine == 'x86_64'", path = "limxsdk-lowlevel/python3/amd64/limxsdk-4.0.2-py3-none-any.whl" },
+    { name = "pytest", specifier = ">=9.1.1" },
+]
 
 [[package]]
 name = "typing-extensions"
