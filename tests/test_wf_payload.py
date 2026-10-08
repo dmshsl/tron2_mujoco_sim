@@ -23,7 +23,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_payload_model_exists():
-    assert (ROOT / "tron2_sim/assets/wf_payload.xml").is_file()
+    assert (ROOT / "tron2_sim/assets/wf_payload/model.xml").is_file()
+
+
+def test_payload_variant_resolves_model_outside_vendor_from_other_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a working directory unrelated to the checkout.
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ROBOT_IP", "127.0.0.1")
+    # When the variant materializes its model.
+    spec = build()
+    path = Path(spec.model_candidates[0])
+    # Then the simulator gets a loadable absolute path owned by this repo.
+    assert path.is_absolute()
+    assert path.is_relative_to(ASSETS / "wf_payload")
+    assert mujoco.MjModel.from_xml_path(str(path)).nu == 10
 
 
 def test_payload_rejects_nonloopback_before_sdk_initialization(monkeypatch):

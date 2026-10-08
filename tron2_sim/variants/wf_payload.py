@@ -52,9 +52,9 @@ class PayloadTerrain:
 def build(terrain: str = "flat", scan_path: Path = DEFAULT_PATH) -> RobotSpec:
     if os.environ.get("ROBOT_IP", "127.0.0.1") != "127.0.0.1":
         raise ValueError("wf_payload is restricted to ROBOT_IP=127.0.0.1")
-    materialize(terrain)
+    model_path = materialize(terrain)
     return RobotSpec(
         robot_type="WF_TRON2A_PAYLOAD", base="WF", family_dir="tron2a",
-        model_candidates=["robot.xml"],
+        model_candidates=[str(model_path)],
         channels=[ChannelSpec("main", LEG_WF, sdk_role="main", imu=IMU_STD)],
         modules=[PayloadTerrain(terrain, scan_path)], sdk_robot="Tron2", cam=(3., -20.))

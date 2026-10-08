@@ -62,3 +62,4 @@ Thumbs.db
 *.log
 MUJOCO_LOG.TXT
 asset_converter/
+/tron2_sim/assets/wf_payload/generated/

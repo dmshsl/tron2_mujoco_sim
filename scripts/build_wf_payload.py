@@ -134,7 +134,7 @@ def build() -> Path:
     keyframes = ET.SubElement(root, "keyframe")
     q = [0, 0, .60, 1, 0, 0, 0] + [0.9, 0, 0, -1.8, 0] * 2
     ET.SubElement(keyframes, "key", name="default_pose", qpos=numbers(q))
-    output = SIM / "tron2_sim/assets/wf_payload.xml"
+    output = SIM / "tron2_sim/assets/wf_payload/model.xml"
     output.parent.mkdir(parents=True, exist_ok=True)
     ET.indent(root)
     ET.ElementTree(root).write(output, encoding="unicode")
