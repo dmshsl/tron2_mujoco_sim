@@ -9,15 +9,16 @@ import signal
 import subprocess
 import sys
 import time
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 from pathlib import Path
 
-os.environ.setdefault("MUJOCO_GL", "egl")
+os.environ.setdefault("MUJOCO_GL", "glfw" if "--viewer" in sys.argv else "egl")
 SIM = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SIM))
 
 import imageio.v2 as imageio
 import mujoco
+import mujoco.viewer
 import numpy as np
 
 from tron2_sim.core import SimCore
@@ -37,6 +38,7 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, required=True)
     parser.add_argument("--video", type=Path, required=True)
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--viewer", action="store_true", help="Show the live passive viewer (use MUJOCO_GL=glfw)")
     parser.add_argument("--height_scan", choices=["gt", "perception"], default="gt")
     parser.add_argument("--render_fps", type=float, default=30.0,
                         help="Target rate for the live perception depth renderer (--height_scan perception)")
@@ -101,7 +103,9 @@ def main() -> None:
         render_thread.warm_up()  # absorb the one-time EGL/shader cold-start cost before the real-time loop
         render_thread.start()
     try:
-        with subprocess.Popen(command, cwd=SIM, env=env, start_new_session=True) as controller:
+        viewer_data = mujoco.MjData(core.model) if args.viewer else core.data
+        with (mujoco.viewer.launch_passive(core.model, viewer_data) if args.viewer else nullcontext()) as viewer, \
+                subprocess.Popen(command, cwd=SIM, env=env, start_new_session=True) as controller:
             if perception:
                 try:
                     cpus = sorted(os.sched_getaffinity(0))
@@ -150,6 +154,8 @@ def main() -> None:
                     poses = []
                     failure = None
                     for frame in range(frames):
+                        if viewer is not None and not viewer.is_running():
+                            break
                         target = (frame + 1) / args.fps
                         while core.data.time + 1e-9 < target:
                             code = controller.poll()
@@ -184,6 +190,13 @@ def main() -> None:
                             if remaining > 0:
                                 time.sleep(remaining)
                         poses.append(core.data.qpos.copy())
+                        if viewer is not None:
+                            with viewer.lock():
+                                viewer_data.qpos[:] = core.data.qpos
+                                mujoco.mj_forward(core.model, viewer_data)
+                                viewer.cam.lookat[:] = core.data.qpos[:3]
+                                viewer.cam.distance = 3.0
+                            viewer.sync()
                         if not np.isfinite(core.data.qpos).all():
                             raise FloatingPointError("Non-finite MuJoCo state")
                     print(f"SIM2SIM frames={len(poses)} sim_s={core.data.time:.3f} "

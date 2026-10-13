@@ -13,6 +13,25 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tron2_sim/scripts"))
 
 
+def test_viewer_run_when_display_is_available(tmp_path: Path) -> None:
+    # Given a real display (xvfb-run is sufficient), policy and finite schedule.
+    if not os.environ.get("DISPLAY"):
+        pytest.skip("run under xvfb-run to exercise the native viewer")
+    command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
+               "--policy", "base", "--height_scan", "gt", "--schedule", "tests/hold_schedule.yaml",
+               "--timeout", "5", "--fps", "10", "--viewer",
+               "--csv", str(tmp_path / "viewer.csv"), "--video", str(tmp_path / "viewer.mp4")]
+    # When running the same SDK harness with the optional passive viewer.
+    result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True,
+                            timeout=60, env={**os.environ, "MUJOCO_GL": "glfw"})
+    # Then policy handoff and rendering both complete without changing the default start.
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "START mode=gantry " in result.stdout
+    assert "POLICY_FIRST_ACTION " in result.stdout
+    with imageio.get_reader(str(tmp_path / "viewer.mp4")) as reader:
+        assert reader.count_frames() == 50
+
+
 def test_position_scale_override_preserves_wheels_and_source() -> None:
     # Given the real generated contract and its independent wheel scales.
     import debug_policy
