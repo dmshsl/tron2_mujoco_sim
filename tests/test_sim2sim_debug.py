@@ -110,3 +110,13 @@ def test_live_perception_feeds_the_real_deploy_pipeline_without_blocking_physics
     assert sum(name.startswith("scan_") for name in header) == 231
     with imageio.get_reader(str(tmp_path / "live.mp4")) as reader:
         assert reader.count_frames() == 50
+
+
+def test_seated_start_requires_the_scripted_standup(tmp_path: Path) -> None:
+    # Given a seated start without --standup scripted, when parsing, then refuse before any physics.
+    command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
+               "--policy", "base_blind", "--schedule", "tests/hold_schedule.yaml", "--timeout", "1",
+               "--start", "seated", "--csv", str(tmp_path / "s.csv"), "--video", str(tmp_path / "s.mp4")]
+    result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=45)
+    assert result.returncode == 2
+    assert "seated start requires the policy controller with --standup scripted" in result.stderr

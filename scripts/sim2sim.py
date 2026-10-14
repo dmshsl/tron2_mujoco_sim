@@ -24,7 +24,7 @@ import numpy as np
 from tron2_sim.core import SimCore
 from tron2_sim.height_scan_perception import PerceptionRenderer, SharedPose
 from tron2_sim.rendering import OffscreenRenderer
-from tron2_sim.start_conditions import GantrySupport, PolicyProgress, ground_start, wheel_bottoms
+from tron2_sim.start_conditions import GantrySupport, PolicyProgress, ground_start, seated_start, wheel_bottoms
 from tron2_sim.variants.wf_payload import build
 
 
@@ -42,10 +42,19 @@ def main() -> None:
     parser.add_argument("--height_scan", choices=["gt", "perception"], default="gt")
     parser.add_argument("--render_fps", type=float, default=30.0,
                         help="Target rate for the live perception depth renderer (--height_scan perception)")
-    parser.add_argument("--start", choices=["ground", "gantry"],
+    parser.add_argument("--start", choices=["ground", "gantry", "seated"],
                         help="Default: gantry for a real --policy run (the real-robot-standard start - "
                              "a crane strap holds the robot until the stand-up policy exists, task 23 "
-                             "ladder step 1), ground for --controller-command smoke tests")
+                             "ladder step 1), ground for --controller-command smoke tests; seated = "
+                             "random in-limit legs, 1 s limp settle on the base bottom (task 22, "
+                             "pair with --standup scripted)")
+    parser.add_argument("--seed", type=int, default=0, help="Seated start joint draw seed")
+    parser.add_argument("--draw", choices=["full", "admissible"], default="full",
+                        help="Seated joint draw: full-limit uniform (default) or DESIGN.md's K3 neighbourhood")
+    parser.add_argument("--settle", type=float, default=1.0,
+                        help="Seated limp settle seconds (0 = held start diagnostic, not a passive equilibrium)")
+    parser.add_argument("--standup", choices=["none", "scripted"], default="none",
+                        help="Forwarded to run_policy.py --standup")
     parser.add_argument("--force_action_scale", type=float,
                         help="Negative control only: replace position action scales; default off")
     parser.add_argument("--controller-command",
@@ -58,11 +67,13 @@ def main() -> None:
         parser.error("positive timeout/fps and an existing schedule are required")
     if args.start == "gantry" and args.controller_command:
         parser.error("gantry release requires the policy controller CSV")
+    if args.start == "seated" and (args.controller_command or args.standup != "scripted"):
+        parser.error("seated start requires the policy controller with --standup scripted")
     if args.force_action_scale is not None and (
             not np.isfinite(args.force_action_scale) or args.force_action_scale <= 0 or args.controller_command):
         parser.error("force_action_scale must be positive/finite and requires the policy controller")
-    if args.render_fps <= 0:
-        parser.error("render_fps must be positive")
+    if args.render_fps <= 0 or not np.isfinite(args.settle) or args.settle < 0:
+        parser.error("render_fps must be positive and settle nonnegative")
     os.environ["ROBOT_IP"] = "127.0.0.1"
     scan_path = Path(f"/tmp/tron2-gt-{os.getpid()}.bin")
     os.environ["TRON2_GT_SCAN_PATH"] = str(scan_path)
@@ -73,7 +84,7 @@ def main() -> None:
         args.controller_python, str(SIM.parent / "tron2_deploy/run_policy.py"),
         "--policy", args.policy, "--robot_ip", "127.0.0.1", "--autostart",
         "--schedule", str(args.schedule.resolve()), "--timeout", str(args.timeout),
-        "--csv", str(args.csv.resolve()), "--height_scan", args.height_scan]
+        "--csv", str(args.csv.resolve()), "--height_scan", args.height_scan, "--standup", args.standup]
     if args.force_action_scale is not None:
         command[1:2] = [str(SIM / "scripts/debug_policy.py"), str(args.force_action_scale)]
     core = SimCore(build(args.terrain, scan_path), str(SIM), headless=True)
@@ -81,7 +92,11 @@ def main() -> None:
         raise RuntimeError("Terrain/GT module failed to attach")
     pose_policy = args.policy if not args.controller_command else "base_blind"
     contract_path = SIM.parent / f"tron2_deploy/controllers/model/WF_TRON2A_{pose_policy.upper()}/contract.yaml"
-    ground_start(core.model, core.data, contract_path)
+    if args.start == "seated":
+        seated = seated_start(core.model, core.data, args.seed, draw=args.draw, settle_s=args.settle)
+        print(f"SEATED {seated}", flush=True)
+    else:
+        ground_start(core.model, core.data, contract_path)
     support = GantrySupport(core.model, core.data) if args.start == "gantry" else None
     print(f"START mode={args.start} xyz={core.data.qpos[:3].tolist()} "
           f"wheel_bottom_z={wheel_bottoms(core.model, core.data)[:, 2].tolist()} "

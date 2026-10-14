@@ -1,4 +1,5 @@
 import io
+import sys
 from pathlib import Path
 
 import mujoco
@@ -79,3 +80,49 @@ def test_gantry_release_is_latched_to_policy_record_not_elapsed_time() -> None:
     assert support.apply(data, True) == 0
     assert support.apply(data, False) == 0
     np.testing.assert_array_equal(data.xfrc_applied, 0.)
+
+
+@pytest.mark.parametrize("draw", ["full", "admissible"])
+def test_seated_start_settles_limp_on_the_base_bottom(draw: str) -> None:
+    from tron2_sim.start_conditions import seated_draw, seated_start
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tron2_common"))
+    from tron2_common.kinematics import BOTTOM, LOWER, NAMES, UPPER
+
+    model = mujoco.MjModel.from_xml_path(str(materialize()))
+    load_terrain(model, "flat")
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    drawn = seated_draw(7, draw)
+    assert np.all(drawn >= LOWER) and np.all(drawn <= UPPER)
+    np.testing.assert_array_equal(seated_draw(7, draw), drawn)  # seeded, reproducible
+    info = seated_start(model, data, 7, draw=draw)
+    assert info["settle_steps"] == pytest.approx(1. / model.opt.timestep)
+    assert info["tilt"] < .1 and abs(data.qpos[2] - BOTTOM) < .01  # upright, on its bottom
+    assert data.time == 0.  # contacts hover at the 1 mm skin margin, so ncon itself is not asserted
+    settled = np.array([data.qpos[model.joint(n).qposadr[0]] for n in NAMES])
+    hard = np.array([model.jnt_range[model.joint(n).id] for n in NAMES])
+    assert np.all(settled >= hard[:, 0] - .02) and np.all(settled <= hard[:, 1] + .02)
+    assert np.max(np.abs(settled - drawn)) > .01  # limp legs moved under gravity
+    for name in NAMES:
+        assert data.ctrl[model.actuator(name.removesuffix("_Joint")).id] == 0.
+
+
+def test_seated_start_held_variant_keeps_the_drawn_pose() -> None:
+    from tron2_sim.start_conditions import seated_draw, seated_start
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tron2_common"))
+    from tron2_common.kinematics import NAMES
+
+    model = mujoco.MjModel.from_xml_path(str(materialize()))
+    load_terrain(model, "flat")
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    info = seated_start(model, data, 3, draw="admissible", settle_s=0.)
+    assert info["settle_steps"] == 0 and info["tilt"] == 0.
+    held = np.array([data.qpos[model.joint(n).qposadr[0]] for n in NAMES])
+    np.testing.assert_allclose(held, seated_draw(3, "admissible"))
+    with pytest.raises(ValueError):
+        seated_start(model, data, 3, settle_s=-1.)
+    with pytest.raises(ValueError):
+        seated_draw(3, "elsewhere")

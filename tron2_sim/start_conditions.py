@@ -1,8 +1,9 @@
-"""Harness-only grounded initialization and a unilateral vertical gantry support."""
+"""Harness-only grounded/seated initialization and a unilateral vertical gantry support."""
 from __future__ import annotations
 
 import csv
 import math
+import sys
 from pathlib import Path
 from typing import TextIO
 
@@ -10,6 +11,8 @@ import mujoco
 import numpy as np
 import numpy.typing as npt
 import yaml
+
+COMMON = Path(__file__).resolve().parents[2] / "tron2_common"
 
 
 def wheel_bottoms(model: mujoco.MjModel, data: mujoco.MjData) -> npt.NDArray[np.float64]:
@@ -39,15 +42,7 @@ def ground_start(model: mujoco.MjModel, data: mujoco.MjData, contract_path: Path
     data.ctrl[:] = 0.
     data.xfrc_applied[:] = 0.
     mujoco.mj_forward(model, data)
-    field = model.hfield("terrain")
-    count = int(field.nrow[0] * field.ncol[0])
-    offset = int(field.adr[0])
-    if np.ptp(model.hfield_data[offset:offset + count]) > 0:
-        robot_geoms = (model.geom_contype != 0) & (model.geom_group != 5)
-        forward_extent = float(np.max(data.geom_xpos[robot_geoms, 0] + model.geom_rbound[robot_geoms]))
-        cell_width = 2. * field.size[0] / (int(field.ncol[0]) - 1)
-        data.qpos[0] = data.geom("terrain").xpos[0] - field.size[0] - forward_extent - cell_width
-        mujoco.mj_forward(model, data)
+    _move_to_flat_border(model, data)
     bottoms = wheel_bottoms(model, data)
     elevations = []
     mask = np.array([0, 0, 0, 0, 0, 1], dtype=np.uint8)
@@ -68,6 +63,91 @@ def ground_start(model: mujoco.MjModel, data: mujoco.MjData, contract_path: Path
     # Hfield contact skins can penetrate even when analytic cylinder bottoms touch.
     data.qpos[2] += max(0., -min(terrain_contacts, default=0.) - .001)
     mujoco.mj_forward(model, data)
+
+
+def _move_to_flat_border(model: mujoco.MjModel, data: mujoco.MjData) -> None:
+    field = model.hfield("terrain")
+    count = int(field.nrow[0] * field.ncol[0])
+    offset = int(field.adr[0])
+    if np.ptp(model.hfield_data[offset:offset + count]) > 0:
+        robot_geoms = (model.geom_contype != 0) & (model.geom_group != 5)
+        forward_extent = float(np.max(data.geom_xpos[robot_geoms, 0] + model.geom_rbound[robot_geoms]))
+        cell_width = 2. * field.size[0] / (int(field.ncol[0]) - 1)
+        data.qpos[0] = data.geom("terrain").xpos[0] - field.size[0] - forward_extent - cell_width
+        mujoco.mj_forward(model, data)
+
+
+def _terrain_height(model: mujoco.MjModel, data: mujoco.MjData, point: npt.NDArray[np.float64]) -> float:
+    origin = np.array([point[0], point[1], point[2] + 2. * model.stat.extent])
+    mask = np.array([0, 0, 0, 0, 0, 1], dtype=np.uint8)
+    distance = mujoco.mj_ray(model, data, origin, np.array([0., 0., -1.]), mask, True, -1,
+                             np.zeros(1, dtype=np.int32))
+    if distance < 0:
+        raise ValueError("No terrain below the seated start")
+    return float(origin[2] - distance)
+
+
+def seated_draw(seed: int, draw: str = "full") -> npt.NDArray[np.float64]:
+    """"full": the Isaac StandUp rung draw - uniform inside the reference's 3 degree
+    limits, rejected while any leg/wheel is below the base-bottom plane or the payload
+    gap < 30 mm. "admissible": DESIGN.md's K3-neighbourhood distribution (the one the
+    reference's own 500-start test uses), reported separately from "full" by design."""
+    sys.path.insert(0, str(COMMON))
+    from tron2_common import standup_reference as reference
+    from tron2_common.kinematics import BOTTOM, LOWER, UPPER, leg_floor, payload_clearance, wheel_floors
+
+    rng = np.random.default_rng(seed)
+    if draw == "admissible":
+        span = np.array([.002, .001, .001, .06] * 2)
+        return reference.k3_plant() + rng.uniform(-span, span) + np.array([0., 0., 0., .07] * 2)
+    if draw != "full":
+        raise ValueError(f"Unknown seated draw {draw!r}")
+    for _ in range(100000):
+        q = rng.uniform(LOWER, UPPER)
+        if leg_floor(q) + BOTTOM < 0 or np.min(wheel_floors(q)) + BOTTOM < 0:
+            continue
+        if payload_clearance(q) >= .03:
+            return q
+    raise ValueError("No nonpenetrating random seated draw within 100000 attempts")
+
+
+def seated_start(model: mujoco.MjModel, data: mujoco.MjData, seed: int, *, draw: str = "full",
+                 settle_s: float = 1., damping: float = .3) -> dict[str, float]:
+    """Seat the upright base on its bottom with random in-limit legs, then settle limp
+    (position stiffness 0, damping 0.3 N*m*s/rad) for settle_s; wheels are free.
+    settle_s=0 is the diagnostic "held" start: the pose is not a passive equilibrium."""
+    sys.path.insert(0, str(COMMON))
+    from tron2_common.kinematics import BOTTOM, NAMES
+
+    if not np.isfinite(settle_s) or settle_s < 0 or damping < 0:
+        raise ValueError("settle time and damping must be finite and nonnegative")
+    q = seated_draw(seed, draw)
+    data.qpos[:7] = [0., 0., model.qpos0[2], 1., 0., 0., 0.]
+    for joint in range(model.njnt):
+        if model.jnt_type[joint] == mujoco.mjtJoint.mjJNT_HINGE:
+            data.qpos[model.jnt_qposadr[joint]] = 0.
+    for name, value in zip(NAMES, q, strict=True):
+        data.qpos[model.joint(name).qposadr[0]] = float(value)
+    data.qvel[:] = 0.
+    data.ctrl[:] = 0.
+    data.xfrc_applied[:] = 0.
+    mujoco.mj_forward(model, data)
+    _move_to_flat_border(model, data)
+    data.qpos[2] = _terrain_height(model, data, data.qpos[:3]) + BOTTOM + .001
+    mujoco.mj_forward(model, data)
+    dofs = [int(model.joint(name).dofadr[0]) for name in NAMES]
+    actuators = [int(model.actuator(name.removesuffix("_Joint")).id) for name in NAMES]
+    steps = round(settle_s / model.opt.timestep)
+    for _ in range(steps):
+        data.ctrl[:] = 0.
+        data.ctrl[actuators] = -damping * data.qvel[dofs]
+        mujoco.mj_step(model, data)
+    data.ctrl[:] = 0.
+    data.time = 0.
+    mujoco.mj_forward(model, data)
+    tilt = math.acos(max(-1., min(1., 1. - 2. * (data.qpos[4] ** 2 + data.qpos[5] ** 2))))
+    return {"seed": float(seed), "settle_steps": float(steps), "base_z": float(data.qpos[2]),
+            "tilt": tilt, "residual_joint_speed": float(np.max(np.abs(data.qvel[dofs])))}
 
 
 class PolicyProgress:
