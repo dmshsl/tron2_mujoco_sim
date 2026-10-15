@@ -311,13 +311,12 @@ class Runner:
         pts, slips = [], []
         for s in "LR":
             g = rb.wheel_geom[s]
-            best = None
-            for i in range(d.ncon):
-                c = d.contact[i]
-                if g in (c.geom1, c.geom2) and (c.geom1 in rb.terrain or c.geom2 in rb.terrain) and c.dist < .002:
-                    best = c.pos.copy() if best is None else best
-            if best is None:
+            hits = [d.contact[i].pos.copy() for i in range(d.ncon)
+                    if g in (d.contact[i].geom1, d.contact[i].geom2) and d.contact[i].dist < .002
+                    and (d.contact[i].geom1 in rb.terrain or d.contact[i].geom2 in rb.terrain)]
+            if not hits:
                 continue
+            best = np.mean(hits, axis=0)  # centre of the cylinder's rim contact points = patch centre
             jac = np.zeros((3, m.nv))
             mujoco.mj_jac(m, d, jac, None, best, m.geom_bodyid[g])
             v = jac @ d.qvel
