@@ -5,6 +5,7 @@ import argparse
 import csv
 import os
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -24,7 +25,14 @@ import numpy as np
 from tron2_sim.core import SimCore
 from tron2_sim.height_scan_perception import PerceptionRenderer, SharedPose
 from tron2_sim.rendering import OffscreenRenderer
-from tron2_sim.start_conditions import GantrySupport, PolicyProgress, ground_start, seated_start, wheel_bottoms
+from tron2_sim.start_conditions import (
+    ContactLabels,
+    GantrySupport,
+    PolicyProgress,
+    ground_start,
+    seated_start,
+    wheel_bottoms,
+)
 from tron2_sim.variants.wf_payload import build
 
 
@@ -36,8 +44,9 @@ def main() -> None:
     parser.add_argument("--schedule", type=Path, required=True)
     parser.add_argument("--timeout", type=float, required=True)
     parser.add_argument("--csv", type=Path, required=True)
-    parser.add_argument("--video", type=Path, required=True)
+    parser.add_argument("--video", type=Path, help="MP4 output; omit for a headless run without rendering")
     parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--video-distance", type=float, default=2.5, help="Follow-camera distance (m)")
     parser.add_argument("--viewer", action="store_true", help="Show the live passive viewer (use MUJOCO_GL=glfw)")
     parser.add_argument("--height_scan", choices=["gt", "perception"], default="gt")
     parser.add_argument("--render_fps", type=float, default=30.0,
@@ -55,6 +64,8 @@ def main() -> None:
                         help="Seated limp settle seconds (0 = held start diagnostic, not a passive equilibrium)")
     parser.add_argument("--standup", choices=["none", "scripted"], default="none",
                         help="Forwarded to run_policy.py --standup")
+    parser.add_argument("--standup-stop-at", choices=["handoff", "A"], default="handoff",
+                        help="Forwarded to run_policy.py --standup-stop-at (A: seated route P0-P3 then hold)")
     parser.add_argument("--force_action_scale", type=float,
                         help="Negative control only: replace position action scales; default off")
     parser.add_argument("--controller-command",
@@ -75,16 +86,33 @@ def main() -> None:
     if args.render_fps <= 0 or not np.isfinite(args.settle) or args.settle < 0:
         parser.error("render_fps must be positive and settle nonnegative")
     os.environ["ROBOT_IP"] = "127.0.0.1"
-    scan_path = Path(f"/tmp/tron2-gt-{os.getpid()}.bin")
+    # Every file touched inside the real-time loops lives in RAM (/dev/shm) while the run lasts: the
+    # scan files are rewritten 50x per second, the controller streams its CSV at 500 Hz and this
+    # process both logs at 1 kHz and tails that CSV. On a busy disk a single blocked read()/write()
+    # on the shared ext4 inode froze the sim and the controller together for 250-320 ms, which is
+    # exactly the SDK stale-data / output-watchdog latch (measured: SIM_LOOP_SLOW poll_ms~250 on
+    # the CSV tail, PROCESS_STALL with zero run-queue wait and zero page faults). The logs are
+    # moved to the requested paths when the run ends.
+    scratch = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path("/tmp")
+    scan_path = scratch / f"tron2-gt-{os.getpid()}.bin"
     os.environ["TRON2_GT_SCAN_PATH"] = str(scan_path)
-    perception_scan_path = Path(f"/tmp/tron2-perception-{os.getpid()}.bin")
+    perception_scan_path = scratch / f"tron2-perception-{os.getpid()}.bin"
+    if args.standup_stop_at != "handoff" and args.standup != "scripted":
+        parser.error("--standup-stop-at requires --standup scripted")
     for path in (args.csv, args.video):
-        path.parent.mkdir(parents=True, exist_ok=True)
+        if path is not None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+    work = scratch / f"tron2-run-{os.getpid()}"
+    work.mkdir(parents=True, exist_ok=True)
+    live = {"controller.csv": args.csv, "sim.csv": args.csv.with_suffix(".sim.csv"),
+            "gtscan.csv": args.csv.with_suffix(".gtscan.csv")}
+    controller_csv = work / "controller.csv"
     command = shlex.split(args.controller_command) if args.controller_command else [
         args.controller_python, str(SIM.parent / "tron2_deploy/run_policy.py"),
         "--policy", args.policy, "--robot_ip", "127.0.0.1", "--autostart",
         "--schedule", str(args.schedule.resolve()), "--timeout", str(args.timeout),
-        "--csv", str(args.csv.resolve()), "--height_scan", args.height_scan, "--standup", args.standup]
+        "--csv", str(controller_csv), "--height_scan", args.height_scan, "--standup", args.standup,
+        "--standup-stop-at", args.standup_stop_at]
     if args.force_action_scale is not None:
         command[1:2] = [str(SIM / "scripts/debug_policy.py"), str(args.force_action_scale)]
     core = SimCore(build(args.terrain, scan_path), str(SIM), headless=True)
@@ -110,6 +138,14 @@ def main() -> None:
         env["TRON2_PERCEPTION_SCAN_PATH"] = str(perception_scan_path)
     else:
         env["TRON2_HEIGHT_SCAN_FACTORY"] = "tron2_sim.height_scan_gt:create_provider"
+    pinned: list[int] = []
+    if perception:
+        try:
+            pinned = sorted(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            pinned = []
+        if len(pinned) >= 2:  # the controller's seated-route planner process belongs on the main cores
+            env["TRON2_PLANNER_CPUS"] = ",".join(str(cpu) for cpu in pinned[:len(pinned) // 2])
     render_thread = None
     if perception:
         shared_pose = SharedPose(core.model.nq)
@@ -123,27 +159,32 @@ def main() -> None:
                 subprocess.Popen(command, cwd=SIM, env=env, start_new_session=True) as controller:
             if perception:
                 try:
-                    cpus = sorted(os.sched_getaffinity(0))
+                    cpus = pinned
                     if len(cpus) >= 2:
                         half = len(cpus) // 2
                         os.sched_setaffinity(0, set(cpus[:half]))
                         os.sched_setaffinity(controller.pid, set(cpus[half:]))
-                        print(f"CPU_AFFINITY main_and_renderer={cpus[:half]} controller={cpus[half:]}", flush=True)
+                        print(f"CPU_AFFINITY main_and_renderer_and_planner={cpus[:half]} controller={cpus[half:]}",
+                              flush=True)
                     else:
                         print(f"CPU_AFFINITY skipped: only {len(cpus)} CPU(s) available", flush=True)
                 except (AttributeError, OSError) as error:
                     print(f"CPU_AFFINITY skipped: {error}", flush=True)
             try:
-                with ExitStack() as resources, imageio.get_writer(
+                with ExitStack() as resources, (imageio.get_writer(
                     str(args.video), fps=args.fps, codec="libx264", macro_block_size=1
-                ) as video, args.csv.with_suffix(".sim.csv").open("w") as stream:
+                ) if args.video is not None else nullcontext()) as video, \
+                        (work / "sim.csv").open("w", buffering=1 << 22) as stream:
                     writer = csv.writer(stream)
+                    labels = ContactLabels(core.model)
                     writer.writerow(["sim_time", "base_x", "base_y", "base_z", "qw", "qx", "qy", "qz",
                                      "vx", "vy", "vz", "wz", "wall_time", "controller_alive",
-                                     "controller_t", "policy_t", "gantry_force", "gantry_released"])
+                                     "controller_t", "policy_t", "gantry_force", "gantry_released", "contacts",
+                                     *[f"tau_{core.model.actuator(i).name}" for i in range(core.model.nu)],
+                                     "wheel_bottom_z_L", "wheel_bottom_z_R"])
                     gt_writer, gt_stream, next_gt_log = None, None, 0.
                     if perception:
-                        gt_stream = resources.enter_context(args.csv.with_suffix(".gtscan.csv").open("w", newline=""))
+                        gt_stream = resources.enter_context((work / "gtscan.csv").open("w", newline=""))
                         gt_writer = csv.writer(gt_stream)
                         gt_writer.writerow(["sim_time", "policy_t"] + [f"gt_scan_{i}" for i in range(231)])
                     # Publish an unchanged measured pose until the real SDK command arrives.
@@ -164,15 +205,17 @@ def main() -> None:
                         time.sleep(.01)
                     start = time.monotonic()
                     progress = None if args.controller_command else PolicyProgress(
-                        resources.enter_context(args.csv.open()))
+                        resources.enter_context(controller_csv.open()))
                     frames = round(args.timeout * args.fps)
                     poses = []
+                    completed = 0
                     failure = None
                     for frame in range(frames):
                         if viewer is not None and not viewer.is_running():
                             break
                         target = (frame + 1) / args.fps
                         while core.data.time + 1e-9 < target:
+                            loop_started = time.monotonic()
                             code = controller.poll()
                             if failure is None and code is not None and (code != 0 or frame < frames - 2):
                                 failure = f"Controller exited early: {code}, frame {frame}/{frames}"
@@ -188,7 +231,9 @@ def main() -> None:
                             policy_started = progress is not None and progress.first_action_t is not None
                             force = 0. if support is None else support.apply(
                                 core.data, policy_started or failure is not None)
+                            tick_started = time.monotonic()
                             core._tick()
+                            tick_done = time.monotonic()
                             if perception:
                                 shared_pose.publish(core.data.qpos, core.data.time)
                                 if gt_writer is not None and core.data.time + 1e-9 >= next_gt_log:
@@ -200,11 +245,23 @@ def main() -> None:
                                              core.data.qvel[5], time.monotonic() - start, int(failure is None),
                                              -1. if progress is None else progress.controller_t,
                                              -1. if progress is None else progress.policy_t,
-                                             force, int(support is not None and support.released)])
-                            remaining = start + float(core.data.time) - time.monotonic()
+                                             force, int(support is not None and support.released),
+                                             labels(core.data), *core.data.actuator_force,
+                                             *wheel_bottoms(core.model, core.data)[:, 2]])
+                            logged = time.monotonic()
+                            remaining = start + float(core.data.time) - logged
                             if remaining > 0:
                                 time.sleep(remaining)
-                        poses.append(core.data.qpos.copy())
+                            if time.monotonic() - loop_started > .05:  # a host stall; explains SDK latches
+                                print(f"SIM_LOOP_SLOW sim_t={core.data.time:.3f} "
+                                      f"poll_ms={1e3 * (tick_started - loop_started):.1f} "
+                                      f"tick_ms={1e3 * (tick_done - tick_started):.1f} "
+                                      f"log_ms={1e3 * (logged - tick_done):.1f} "
+                                      f"sleep_ms={1e3 * (time.monotonic() - logged):.1f} "
+                                      f"planned_sleep_ms={1e3 * max(remaining, 0.):.1f}", flush=True)
+                        completed += 1
+                        if video is not None:
+                            poses.append(core.data.qpos.copy())
                         if viewer is not None:
                             with viewer.lock():
                                 viewer_data.qpos[:] = core.data.qpos
@@ -214,19 +271,21 @@ def main() -> None:
                             viewer.sync()
                         if not np.isfinite(core.data.qpos).all():
                             raise FloatingPointError("Non-finite MuJoCo state")
-                    print(f"SIM2SIM frames={len(poses)} sim_s={core.data.time:.3f} "
+                    print(f"SIM2SIM frames={completed} sim_s={core.data.time:.3f} "
                           f"wall_s={time.monotonic()-start:.3f}", flush=True)
                     if render_thread is not None:
                         render_thread.stop()
                         print(f"PERCEPTION_RENDER_RATE achieved_hz={render_thread.achieved_fps:.2f} "
                               f"target_hz={args.render_fps:.2f} frames={render_thread.rendered} "
                               f"skipped_ticks={render_thread.skipped_ticks}", flush=True)
-                    render_data = mujoco.MjData(core.model)
-                    with OffscreenRenderer(core.model) as renderer:
-                        for pose in poses:
-                            render_data.qpos[:] = pose
-                            mujoco.mj_forward(core.model, render_data)
-                            video.append_data(renderer.rgb(render_data))
+                    if video is not None:
+                        render_data = mujoco.MjData(core.model)
+                        with OffscreenRenderer(core.model) as renderer:
+                            renderer.camera.distance = args.video_distance
+                            for pose in poses:
+                                render_data.qpos[:] = pose
+                                mujoco.mj_forward(core.model, render_data)
+                                video.append_data(renderer.rgb(render_data))
                     if failure is not None:
                         raise RuntimeError(failure)
             finally:
@@ -248,6 +307,10 @@ def main() -> None:
             render_thread.stop()  # idempotent if already stopped above; guards early-failure exits
         scan_path.unlink(missing_ok=True)
         perception_scan_path.unlink(missing_ok=True)
+        for name, destination in live.items():
+            if (work / name).exists():
+                shutil.move(str(work / name), str(destination))
+        shutil.rmtree(work, ignore_errors=True)
     print("RESULT: PASS (transport/render harness only; policy gates belong to task 12)", flush=True)
 
 

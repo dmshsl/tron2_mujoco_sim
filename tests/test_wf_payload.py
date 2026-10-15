@@ -18,6 +18,7 @@ from tron2_sim.rendering import OffscreenRenderer
 from tron2_sim.spec import IMU_STD, LEG_WF, ChannelSpec
 from tron2_sim.terrain import load_terrain
 from tron2_sim.variants.wf_payload import build
+from conftest import require_sdk_loopback_free
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -232,6 +233,7 @@ def test_two_second_video_reopens_with_exact_frame_count(scene, tmp_path):
 
 
 def test_harness_with_sdk_hold_controller(tmp_path):
+    require_sdk_loopback_free()
     video = tmp_path / "hold.mp4"
     command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
                "--policy", "hold", "--schedule", "tests/hold_schedule.yaml", "--timeout", "2", "--fps", "10",

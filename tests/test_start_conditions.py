@@ -126,3 +126,21 @@ def test_seated_start_held_variant_keeps_the_drawn_pose() -> None:
         seated_start(model, data, 3, settle_s=-1.)
     with pytest.raises(ValueError):
         seated_draw(3, "elsewhere")
+
+
+def test_contact_labels_name_terrain_contacts_by_body() -> None:
+    from tron2_sim.start_conditions import ContactLabels, seated_start
+
+    model = mujoco.MjModel.from_xml_path(str(materialize()))
+    load_terrain(model, "flat")
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    seated_start(model, data, 2)
+    labels = ContactLabels(model, gap=.002)
+    for _ in range(20):  # the seated hfield contact set flickers step to step
+        mujoco.mj_step(model, data)
+        if "base" in labels(data).split(";"):
+            break
+    seen = set(labels(data).split(";")) - {""}
+    assert "base" in seen and all(not label.startswith(("payload:", "self:")) for label in seen)
+    assert labels.label[model.geom("cam_rear_body_collision").id] == "payload:cam_rear_body"

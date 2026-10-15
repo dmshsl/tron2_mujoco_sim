@@ -150,6 +150,36 @@ def seated_start(model: mujoco.MjModel, data: mujoco.MjData, seed: int, *, draw:
             "tilt": tilt, "residual_joint_speed": float(np.max(np.abs(data.qvel[dofs])))}
 
 
+class ContactLabels:
+    """Per-step contact categories for the stand-up logs: terrain contacts by body (base_Link
+    bottom as "base", payload geoms as "payload:<geom>") and robot self contacts as "self:a/b"."""
+
+    def __init__(self, model: mujoco.MjModel, gap: float = .001) -> None:
+        self.gap = gap
+        self.terrain = model.geom_group == 5
+        self.label = []
+        for gid in range(model.ngeom):
+            body = model.body(model.geom_bodyid[gid]).name
+            name = model.geom(gid).name
+            short = body.removesuffix("_Link")
+            self.label.append(f"payload:{name.removesuffix('_collision')}" if body == "base_Link" and name
+                              else "base" if body == "base_Link" else short)
+
+    def __call__(self, data: mujoco.MjData) -> str:
+        labels = set()
+        for contact in data.contact[:data.ncon]:
+            if contact.dist > self.gap:
+                continue
+            a, b = int(contact.geom1), int(contact.geom2)
+            if self.terrain[a] and self.terrain[b]:
+                continue
+            if self.terrain[a] or self.terrain[b]:
+                labels.add(self.label[b if self.terrain[a] else a])
+            else:
+                labels.add("self:" + "/".join(sorted((self.label[a], self.label[b]))))
+        return ";".join(sorted(labels))
+
+
 class PolicyProgress:
     """Consume complete controller CSV records, including zero-valued first actions."""
 

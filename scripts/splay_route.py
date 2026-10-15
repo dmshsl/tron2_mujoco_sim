@@ -176,6 +176,60 @@ def solve_s0(rb: Robot) -> tuple[list[float], dict]:
                   "axle_z": rb.axle_z(), "single_joint_limits(+-20deg)": alone}
 
 
+POSE_A = [-2.42, 170.09, -103.76, -142.05]  # user's pose A (= S0), left leg deg
+
+
+def payload_distance(rb: Robot) -> float:
+    """MuJoCo convex (hull) distance from any leg geom to any payload geom at the current pose."""
+    m, d = rb.m, rb.d
+    mujoco.mj_forward(m, d)
+    legs = [g for g in rb.geoms if m.body(m.geom_bodyid[g]).name != "base_Link"]
+    payload = [g for g in range(m.ngeom) if m.geom_bodyid[g] == rb.base and m.geom(g).name.endswith("_collision")]
+    return min(mujoco.mj_geomDistance(m, d, a, b, .2, None) for a in legs for b in payload)
+
+
+def solve_pose_a(rb: Robot) -> dict:
+    """A' = nearest pose to A (deg norm, mirrored legs) with the base on the ground, both wheels on
+    the ground (0.3 mm), CoM on the wheel line, axle tilt as in A, and the tron2_common payload
+    clearance bound >= 0.033 (0.03 rule + the same 3 mm numeric margin as K2/K3). A_air lifts A'
+    by the minimum change until both wheels are >= 0.035 above the base-bottom plane."""
+    from scipy.optimize import minimize
+
+    sys.path.insert(0, str(SIM.parent / "tron2_common"))
+    from tron2_common.kinematics import BOTTOM, LOWER, UPPER, payload_clearance, wheel_floors
+
+    def full(left: np.ndarray) -> np.ndarray:
+        return np.radians(list(left) + mirror(list(left)))
+
+    def static(left: np.ndarray) -> tuple[float, float]:
+        rb.set_pose(list(left) + mirror(list(left)), BOTTOM)
+        return rb.wheel_line_offset(), rb.axle_z()
+
+    def report(left: list[float]) -> dict:
+        offset, axle = static(np.array(left))
+        q = full(np.array(left))
+        return {"left_deg": [round(v, 6) for v in left], "right_deg": [round(v, 6) for v in mirror(left)],
+                "payload_bound_m": payload_clearance(q), "payload_mujoco_m": payload_distance(rb),
+                "wheel_gap_m": (wheel_floors(q) + BOTTOM).tolist(), "com_wheel_line_offset_m": offset, "axle_z": axle}
+
+    bounds = list(zip(np.degrees(LOWER[:4]), np.degrees(UPPER[:4]), strict=True))
+    axle_a = static(np.array(POSE_A))[1]
+    clearance = {"type": "ineq", "fun": lambda x: (payload_clearance(full(x)) - .033) * 1e3}
+    axle = {"type": "eq", "fun": lambda x: (static(x)[1] - axle_a) * 1e2}
+    on_ground = {"type": "eq", "fun": lambda x: (wheel_floors(full(x))[0] + BOTTOM - .0003) * 1e3}
+    on_line = {"type": "eq", "fun": lambda x: static(x)[0] * 1e3}
+    lifted = {"type": "ineq", "fun": lambda x: (wheel_floors(full(x)).min() + BOTTOM - .035) * 1e3}
+    options = {"maxiter": 400, "ftol": 1e-12}
+    planted = minimize(lambda x: np.sum((x - POSE_A) ** 2), np.array(POSE_A), method="SLSQP", bounds=bounds,
+                       constraints=[clearance, axle, on_ground, on_line], options=options)
+    a_prime = [float(v) for v in planted.x]
+    airborne = minimize(lambda x: np.sum((x - planted.x) ** 2), planted.x, method="SLSQP", bounds=bounds,
+                        constraints=[clearance, lifted], options=options)
+    return {"A": report(POSE_A), "A_prime": report(a_prime), "A_air": report([float(v) for v in airborne.x]),
+            "A_prime_change_deg": [round(float(v), 4) for v in planted.x - POSE_A],
+            "solver": [planted.success, airborne.success]}
+
+
 def rotate_legs(rb: Robot, left: list[float], alpha_deg: float, guess: list[float]) -> list[float]:
     """Joints whose yaw-link orientation equals Rz(alpha) * orientation(left) (knee unchanged)."""
     yb = rb.m.body("proximal_yaw_L_Link").id
@@ -471,8 +525,13 @@ def main() -> None:
     ap.add_argument("--ilc", type=int, default=0, help="Offline ILC passes on the S0/S1 joint targets")
     ap.add_argument("--s1_end_alpha", type=float, default=-50.,
                     help="S1-end kneel = halfcrouch_front rotated by alpha deg about vertical (-90 = lateral)")
+    ap.add_argument("--solve-a-prime", action="store_true",
+                    help="Only solve pose A' / A_air (tron2_common seated route constants) and print JSON")
     args = ap.parse_args()
     rb = Robot()
+    if args.solve_a_prime:
+        print(json.dumps(solve_pose_a(rb), indent=1, default=float))
+        return
     report: dict = {"variant": args.variant}
 
     s0, s0_info = solve_s0(rb)

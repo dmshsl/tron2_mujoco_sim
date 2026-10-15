@@ -1,22 +1,39 @@
 """The negative-control scale is confined to a simulator-owned process wrapper."""
 import csv
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import imageio.v2 as imageio
 import pytest
+from conftest import require_sdk_loopback_free
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tron2_sim/scripts"))
 
 
-def test_viewer_run_when_display_is_available(tmp_path: Path) -> None:
-    # Given a real display (xvfb-run is sufficient), policy and finite schedule.
+def display_available() -> bool:
+    """A DISPLAY that this session can actually open (a stale DISPLAY from a detached shell,
+    e.g. an overnight job, must skip rather than crash the native viewer)."""
     if not os.environ.get("DISPLAY"):
-        pytest.skip("run under xvfb-run to exercise the native viewer")
+        return False
+    probe = shutil.which("xdpyinfo")
+    if probe is None:
+        return True  # cannot probe; trust the variable as before
+    try:
+        return subprocess.run([probe], capture_output=True, timeout=10, check=False).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def test_viewer_run_when_display_is_available(tmp_path: Path) -> None:
+    require_sdk_loopback_free()
+    # Given a real display (xvfb-run is sufficient), policy and finite schedule.
+    if not display_available():
+        pytest.skip("no reachable X display: run under xvfb-run to exercise the native viewer")
     command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
                "--policy", "base", "--height_scan", "gt", "--schedule", "tests/hold_schedule.yaml",
                "--timeout", "5", "--fps", "10", "--viewer",
@@ -60,6 +77,7 @@ def test_invalid_scale_is_rejected(scale: float) -> None:
 
 
 def test_controller_exit_keeps_video_but_fails_gate(tmp_path: Path) -> None:
+    require_sdk_loopback_free()
     command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
                "--policy", "hold", "--schedule", "tests/hold_schedule.yaml", "--timeout", "3",
                "--fps", "10", "--csv", str(tmp_path / "failed.csv"), "--video", str(tmp_path / "failed.mp4"),
@@ -75,6 +93,7 @@ def test_controller_exit_keeps_video_but_fails_gate(tmp_path: Path) -> None:
 
 
 def test_default_start_is_gantry_for_a_real_policy_run(tmp_path: Path) -> None:
+    require_sdk_loopback_free()
     # A real --policy run (no --controller-command) is the real-robot-standard
     # start: held by a crane strap until the policy's first action, matching
     # the task-23 bring-up ladder, which never powers on a base policy
@@ -89,6 +108,7 @@ def test_default_start_is_gantry_for_a_real_policy_run(tmp_path: Path) -> None:
 
 
 def test_live_perception_feeds_the_real_deploy_pipeline_without_blocking_physics(tmp_path: Path) -> None:
+    require_sdk_loopback_free()
     # Given the Base policy with a short schedule, when run with
     # --height_scan perception (todo 16), then the live renderer thread
     # produces frames near its 30 Hz target, the real odometry/height_map
@@ -120,3 +140,13 @@ def test_seated_start_requires_the_scripted_standup(tmp_path: Path) -> None:
     result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=45)
     assert result.returncode == 2
     assert "seated start requires the policy controller with --standup scripted" in result.stderr
+
+
+def test_stop_at_a_requires_the_scripted_standup(tmp_path: Path) -> None:
+    # Given --standup-stop-at A without --standup scripted, when parsing, then refuse before physics.
+    command = [sys.executable, "scripts/sim2sim.py", "--variant", "wf_payload", "--terrain", "flat",
+               "--policy", "base_blind", "--schedule", "tests/hold_schedule.yaml", "--timeout", "1",
+               "--standup-stop-at", "A", "--csv", str(tmp_path / "a.csv")]
+    result = subprocess.run(command, cwd=ROOT / "tron2_sim", capture_output=True, text=True, timeout=45)
+    assert result.returncode == 2
+    assert "--standup-stop-at requires --standup scripted" in result.stderr
