@@ -27,6 +27,7 @@ from tron2_sim.height_scan_perception import PerceptionRenderer, SharedPose
 from tron2_sim.rendering import OffscreenRenderer
 from tron2_sim.start_conditions import (
     ContactLabels,
+    ContactSlip,
     GantrySupport,
     PolicyProgress,
     ground_start,
@@ -177,11 +178,12 @@ def main() -> None:
                         (work / "sim.csv").open("w", buffering=1 << 22) as stream:
                     writer = csv.writer(stream)
                     labels = ContactLabels(core.model)
+                    slip = ContactSlip(core.model)
                     writer.writerow(["sim_time", "base_x", "base_y", "base_z", "qw", "qx", "qy", "qz",
                                      "vx", "vy", "vz", "wz", "wall_time", "controller_alive",
                                      "controller_t", "policy_t", "gantry_force", "gantry_released", "contacts",
                                      *[f"tau_{core.model.actuator(i).name}" for i in range(core.model.nu)],
-                                     "wheel_bottom_z_L", "wheel_bottom_z_R"])
+                                     "wheel_bottom_z_L", "wheel_bottom_z_R", "slip"])
                     gt_writer, gt_stream, next_gt_log = None, None, 0.
                     if perception:
                         gt_stream = resources.enter_context((work / "gtscan.csv").open("w", newline=""))
@@ -247,7 +249,7 @@ def main() -> None:
                                              -1. if progress is None else progress.policy_t,
                                              force, int(support is not None and support.released),
                                              labels(core.data), *core.data.actuator_force,
-                                             *wheel_bottoms(core.model, core.data)[:, 2]])
+                                             *wheel_bottoms(core.model, core.data)[:, 2], slip(core.data)])
                             logged = time.monotonic()
                             remaining = start + float(core.data.time) - logged
                             if remaining > 0:

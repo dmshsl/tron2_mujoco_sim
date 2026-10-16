@@ -65,6 +65,15 @@ def test_action_monitor_waits_for_complete_policy_record() -> None:
     assert progress.policy_t == .1
 
 
+def test_action_monitor_skips_a_torn_record() -> None:
+    from tron2_sim.start_conditions import PolicyProgress
+
+    source = io.StringIO("t,policy_t,action_0\n9,0\n9.1,0.1,0\n")
+    progress = PolicyProgress(source)
+    progress.update()
+    assert progress.first_action_t == 9.1
+
+
 def test_gantry_release_is_latched_to_policy_record_not_elapsed_time() -> None:
     from tron2_sim.start_conditions import GantrySupport, ground_start
 
@@ -144,3 +153,91 @@ def test_contact_labels_name_terrain_contacts_by_body() -> None:
     seen = set(labels(data).split(";")) - {""}
     assert "base" in seen and all(not label.startswith(("payload:", "self:")) for label in seen)
     assert labels.label[model.geom("cam_rear_body_collision").id] == "payload:cam_rear_body"
+
+
+def test_flat_floor_is_a_plane_with_steady_base_contact() -> None:
+    """The flat terrain collides through an analytic plane: the seated base keeps a continuous
+    normal force (the hfield gave 0.7 contacts/step, zero force in 80 % of steps, 15 kN spikes),
+    does not creep under a few N m of leg torque and a loaded wheel at A' does not spin in place."""
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tron2_common"))
+    from tron2_common.kinematics import NAMES
+    from tron2_common.seated_route import A_PRIME
+
+    from tron2_sim.start_conditions import ContactLabels, seated_start
+    from tron2_sim.terrain import FLAT_PLANE
+
+    model = mujoco.MjModel.from_xml_path(str(materialize("flat")))
+    load_terrain(model, "flat")
+    assert model.geom(FLAT_PLANE).type == mujoco.mjtGeom.mjGEOM_PLANE and model.geom_contype[model.geom("terrain").id] == 0
+    stairs = mujoco.MjModel.from_xml_path(str(materialize("stairs")))
+    assert all(stairs.geom_type[g] != mujoco.mjtGeom.mjGEOM_PLANE for g in range(stairs.ngeom))  # only flat
+    kp = np.array([159.67, 159.67, 53.22, 159.67] * 2)
+    kd = np.array([10.16, 10.16, 3.39, 10.16] * 2)
+    actuators = [model.actuator(n.removesuffix("_Joint")).id for n in NAMES]
+    dofs = [model.joint(n).dofadr[0] for n in NAMES]
+    qadr = [model.joint(n).qposadr[0] for n in NAMES]
+    wheel_act = [model.actuator("wheel_L").id, model.actuator("wheel_R").id]
+    wheel_dof = [model.joint("wheel_L_Joint").dofadr[0], model.joint("wheel_R_Joint").dofadr[0]]
+    base = model.body("base_Link").id
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    seated_start(model, data, 2)
+    target = data.qpos[qadr].copy()
+    target[1] += np.radians(1.7)  # a hold a little off the settled pose: a few N m against the floor
+    force = np.zeros(6)
+    normal, start = [], None
+    for step in range(2500):
+        data.ctrl[:] = 0.
+        data.ctrl[actuators] = kp * (target - data.qpos[qadr]) - kd * data.qvel[dofs]
+        data.ctrl[wheel_act] = -.6 * data.qvel[wheel_dof]
+        mujoco.mj_step(model, data)
+        if step == 1499:
+            start = data.qpos[:2].copy()
+        if step >= 1500:
+            total = 0.
+            for k in range(data.ncon):
+                contact = data.contact[k]
+                geom = contact.geom2 if model.geom_group[contact.geom1] == 5 else contact.geom1
+                if model.geom_bodyid[geom] == base and not model.geom(geom).name:
+                    mujoco.mj_contactForce(model, data, k, force)
+                    total += force[0]
+            normal.append(total)
+    assert min(normal) > 100. and max(normal) < 1000.  # continuous support, no bouncing
+    assert np.linalg.norm(data.qpos[:2] - start) < 1e-3  # no creep over 1 s
+    labels = ContactLabels(model)
+    assert "base" in labels(data).split(";")  # force-carrying contacts count even at the 2 mm margin
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    seated_start(model, data, 2, settle_s=0.)
+    for name, value in zip(NAMES, A_PRIME, strict=True):
+        data.qpos[model.joint(name).qposadr[0]] = value
+    data.qvel[:] = 0.
+    mujoco.mj_forward(model, data)
+    for step in range(3000):
+        data.ctrl[:] = 0.
+        data.ctrl[actuators] = kp * (A_PRIME - data.qpos[qadr]) - kd * data.qvel[dofs]
+        data.ctrl[wheel_act] = -.6 * data.qvel[wheel_dof]
+        mujoco.mj_step(model, data)
+        if step == 1999:
+            angle = data.qpos[model.joint("wheel_L_Joint").qposadr[0]]
+    assert abs(data.qpos[model.joint("wheel_L_Joint").qposadr[0]] - angle) < .02  # < 0.02 rad/s: no spin at A'
+
+
+def test_contact_slip_logs_material_and_centre_velocity() -> None:
+    from tron2_sim.start_conditions import ContactSlip, seated_start
+
+    model = mujoco.MjModel.from_xml_path(str(materialize()))
+    load_terrain(model, "flat")
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    seated_start(model, data, 2)
+    slip = ContactSlip(model)
+    for _ in range(50):
+        data.ctrl[:] = 0.
+        mujoco.mj_step(model, data)
+    parsed = {}
+    for part in filter(None, slip(data).split(";")):
+        label, values = part.split("=")
+        parsed[label] = [float(v) for v in values.split(",")]
+    assert "base" in parsed and all(len(v) == 6 for v in parsed.values())
+    assert all(v[0] >= 0. and abs(np.hypot(v[2], v[3]) - v[0]) < 2e-5 for v in parsed.values())  # vt = |(mx, my)| on a flat floor (5-decimal log)
+    assert all(abs(x) < .05 for v in parsed.values() for x in v)  # a settled heap barely moves

@@ -152,12 +152,18 @@ def seated_start(model: mujoco.MjModel, data: mujoco.MjData, seed: int, *, draw:
 
 class ContactLabels:
     """Per-step contact categories for the stand-up logs: terrain contacts by body (base_Link
-    bottom as "base", payload geoms as "payload:<geom>") and robot self contacts as "self:a/b"."""
+    bottom as "base", payload geoms as "payload:<geom>") and robot self contacts as "self:a/b".
+    A contact counts when it carries a normal force of at least `min_force` (the solver keeps a
+    resting body at its contact margin, ~2 mm on the plane floor, so distance alone is no test)
+    or when it penetrates within `gap`."""
 
-    def __init__(self, model: mujoco.MjModel, gap: float = .001) -> None:
+    def __init__(self, model: mujoco.MjModel, gap: float = .001, min_force: float = .5) -> None:
+        self.model = model
         self.gap = gap
+        self.min_force = min_force
         self.terrain = model.geom_group == 5
         self.label = []
+        self._force = np.zeros(6)
         for gid in range(model.ngeom):
             body = model.body(model.geom_bodyid[gid]).name
             name = model.geom(gid).name
@@ -165,11 +171,19 @@ class ContactLabels:
             self.label.append(f"payload:{name.removesuffix('_collision')}" if body == "base_Link" and name
                               else "base" if body == "base_Link" else short)
 
+    def active(self, data: mujoco.MjData, index: int) -> bool:
+        contact = data.contact[index]
+        if contact.dist <= self.gap:
+            return True
+        mujoco.mj_contactForce(self.model, data, index, self._force)
+        return bool(self._force[0] >= self.min_force)
+
     def __call__(self, data: mujoco.MjData) -> str:
         labels = set()
-        for contact in data.contact[:data.ncon]:
-            if contact.dist > self.gap:
+        for index in range(data.ncon):
+            if not self.active(data, index):
                 continue
+            contact = data.contact[index]
             a, b = int(contact.geom1), int(contact.geom2)
             if self.terrain[a] and self.terrain[b]:
                 continue
@@ -178,6 +192,47 @@ class ContactLabels:
             else:
                 labels.add("self:" + "/".join(sorted((self.label[a], self.label[b]))))
         return ";".join(sorted(labels))
+
+
+class ContactSlip:
+    """Per-step slip of every robot body touching the terrain, for the drag metrics of the seated
+    route: ``label=vt,vn,mx,my,cx,cy;...`` with vt the largest tangential speed (m/s) of the body's
+    material at its contact points, vn the normal speed there (positive = separating), (mx, my)
+    that material velocity's horizontal components and (cx, cy) the horizontal velocity of the
+    geom centre (m/s, world). The analysis averages the vectors over 50 ms windows: contact chatter
+    and body rocking cancel, steady sliding stays. Note: a loaded wheel resting on MuJoCo's plane
+    spins in place (pyramidal friction cone on a tilted rim, ~0.5 rad/s at kd 0.6), so for wheels
+    the centre velocity (translation along the floor, rolling included) is the drag measure."""
+
+    def __init__(self, model: mujoco.MjModel, gap: float = .001) -> None:
+        self.model = model
+        self.labels = ContactLabels(model, gap)
+        self.gap = gap
+
+    def __call__(self, data: mujoco.MjData) -> str:
+        per_body: dict[str, list[tuple[float, float, float, float, float, float]]] = {}
+        velocity = np.zeros(6)
+        for index in range(data.ncon):
+            if not self.labels.active(data, index):
+                continue
+            contact = data.contact[index]
+            a, b = int(contact.geom1), int(contact.geom2)
+            if self.labels.terrain[a] == self.labels.terrain[b]:
+                continue
+            robot, sign = (b, 1.) if self.labels.terrain[a] else (a, -1.)
+            mujoco.mj_objectVelocity(self.model, data, mujoco.mjtObj.mjOBJ_GEOM, robot, velocity, 0)
+            point = velocity[3:] + np.cross(velocity[:3], contact.pos - data.geom_xpos[robot])
+            normal = sign * np.asarray(contact.frame[:3])  # from the terrain into the robot geom
+            vn = float(point @ normal)
+            tangential = point - vn * normal
+            per_body.setdefault(self.labels.label[robot], []).append(
+                (float(np.linalg.norm(tangential)), vn, float(tangential[0]), float(tangential[1]),
+                 float(velocity[3]), float(velocity[4])))
+        parts = []
+        for label in sorted(per_body):
+            vt, vn, mx, my, cx, cy = max(per_body[label], key=lambda e: e[0])
+            parts.append(f"{label}={vt:.5f},{vn:.5f},{mx:.5f},{my:.5f},{cx:.5f},{cy:.5f}")
+        return ";".join(parts)
 
 
 class PolicyProgress:
@@ -202,6 +257,8 @@ class PolicyProgress:
             if not self.header:
                 self.header = values
                 continue
+            if len(values) != len(self.header):
+                continue  # a torn record (seen once per ~50 runs: runs50_v8 seed 31, runs50_v10 seed 45): skip it
             row = dict(zip(self.header, values, strict=True))
             self.controller_t, self.policy_t = float(row["t"]), float(row["policy_t"])
             actions = [float(value) for key, value in row.items() if key.startswith("action_")]
