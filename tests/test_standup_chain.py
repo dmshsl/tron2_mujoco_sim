@@ -71,6 +71,31 @@ def test_nonzero_exit_or_missing_csv_is_a_crash(tmp_path):
     assert missing["outcome"] == "crash" and not missing["plumbing_ok"]
 
 
+def test_start_family_and_wheel_speed_during_the_standup(tmp_path):
+    # L leg at A' (roll family), R leg at A'_p (pitch family); wheel 50 rad/s before the policy is ignored,
+    # 47 during the stand-up, 60 after the hand-off (Base driving) only counts for the overall max.
+    a_prime = [-.056, 2.873, -1.779, -2.336]
+    a_prime_p = [-3.089, -.094, -1.383, -2.339]
+    controller = tmp_path / "chain.csv"
+    rows = [(5., 4, 50.), (10., 5, 20.), (11., 5, -47.), (13., 6, 60.)]
+    with controller.open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["t", "policy_t", "standup_phase"] + [f"q_{i}" for i in range(10)] + [f"dq_{i}" for i in range(10)])
+        for t, phase, wheel in rows:
+            q = a_prime + [0.] + a_prime_p + [0.]
+            dq = [0.] * 4 + [wheel] + [0.] * 4 + [wheel / 2]
+            writer.writerow([t, 0., phase] + q + dq)
+    sim = tmp_path / "chain.sim.csv"
+    with sim.open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(SIM_COLUMNS)
+        writer.writerows([[t, 0., 0., .5, 1., 0., 0., 0., t, 0.] for t, *_ in rows])
+    summary = CHAIN.summarize("RESULT: PASS\n", controller, sim, 0)
+    assert summary["start_family"] == ["roll", "pitch"]
+    assert summary["standup_wheel_speed_max"] == pytest.approx(47.)
+    assert summary["wheel_speed_max"] == pytest.approx(60.)
+
+
 @pytest.mark.parametrize("arguments,message", [
     (["--start", "seated"], "seated start requires the policy controller with --standup scripted or learned"),
     (["--start", "a_prime"], "seated start requires the policy controller with --standup scripted or learned"),

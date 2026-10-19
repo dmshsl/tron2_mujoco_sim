@@ -12,6 +12,8 @@ captures its output, and classifies the run from the controller/sim CSVs and the
                    and the harness ran to the end with finite state and both processes exiting 0
   crash            anything else (non-zero exit, traceback, missing CSV, non-finite state)
 plumbing_ok = the learned stand-up policy ran (phase 5 reached) and the outcome is not a crash.
+Also reported: the per-leg joint family at the policy start (roll = A', pitch = A'_p; the seated route decides it) and
+the max |wheel speed| from the controller CSV during the stand-up and overall (deploy latch 40 x 1.2 = 48 rad/s).
 """
 from __future__ import annotations
 
@@ -40,6 +42,29 @@ def tilt(qw: float, qx: float, qy: float, qz: float) -> float:
     return math.acos(max(-1., min(1., 1. - 2. * (qx * qx + qy * qy))))
 
 
+def leg_family(pitch: float, roll: float, yaw: float) -> str:
+    """Coarse per-leg joint family (tron2_rl/standup/catch.leg_family): standard, roll (A'), pitch (A'_p), other."""
+    if abs(roll) <= .3 and abs(yaw) <= .5 and pitch > -.5:
+        return "standard"
+    if abs(roll) > 1.5:
+        return "roll"
+    return "pitch" if pitch < -2. else "other"
+
+
+def wheel_and_family(joints: list, policy_t: float | None, handoff_t: float | None) -> dict:
+    """Start family per leg at the first policy step; max |wheel dq| during the stand-up (policy start to hand-off)."""
+    if not joints:
+        return {}
+    out: dict = {"wheel_speed_max": round(max(max(w) for _, _, w in joints), 3)}
+    if policy_t is not None:
+        start = next((q for t, q, _ in joints if t >= policy_t), None)
+        if start is not None:
+            out["start_family"] = [leg_family(*start[0:3]), leg_family(*start[5:8])]
+        during = [max(w) for t, _, w in joints if t >= policy_t and (handoff_t is None or t < handoff_t)]
+        out["standup_wheel_speed_max"] = round(max(during), 3) if during else None
+    return out
+
+
 def summarize(log: str, controller_csv: Path, sim_csv: Path, returncode: int) -> dict:
     found: dict[str, list] = {name: [] for name in PATTERNS}
     for line in log.splitlines():
@@ -55,9 +80,13 @@ def summarize(log: str, controller_csv: Path, sim_csv: Path, returncode: int) ->
         summary.update(outcome="crash", plumbing_ok=False, reason="missing CSV")
         return summary
     phases: list[tuple[float, int]] = []
+    joints: list[tuple[float, list[float], list[float]]] = []  # (t, q SDK order, |wheel dq| L R)
     with controller_csv.open() as stream:
         for row in csv.DictReader(stream):
             phases.append((float(row["t"]), int(float(row["standup_phase"]))))
+            if "q_0" in row and "dq_4" in row:
+                joints.append((float(row["t"]), [float(row[f"q_{i}"]) for i in range(10)],
+                               [abs(float(row["dq_4"])), abs(float(row["dq_9"]))]))
     first = {}
     for t, phase in phases:
         first.setdefault(phase, t)
@@ -65,6 +94,7 @@ def summarize(log: str, controller_csv: Path, sim_csv: Path, returncode: int) ->
     summary["phase_first_t"] = {str(k): round(v, 3) for k, v in sorted(first.items())}
     policy_t = first.get(5)
     handoff_t = first.get(6)
+    summary |= wheel_and_family(joints, policy_t, handoff_t)
     rows = []
     finite = True
     with sim_csv.open() as stream:
