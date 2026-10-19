@@ -57,14 +57,17 @@ def main() -> None:
                              "a crane strap holds the robot until the stand-up policy exists, task 23 "
                              "ladder step 1), ground for --controller-command smoke tests; seated = "
                              "random in-limit legs, 1 s limp settle on the base bottom (task 22, "
-                             "pair with --standup scripted)")
+                             "pair with --standup scripted or learned)")
     parser.add_argument("--seed", type=int, default=0, help="Seated start joint draw seed")
     parser.add_argument("--draw", choices=["full", "admissible"], default="full",
                         help="Seated joint draw: full-limit uniform (default) or DESIGN.md's K3 neighbourhood")
     parser.add_argument("--settle", type=float, default=1.0,
                         help="Seated limp settle seconds (0 = held start diagnostic, not a passive equilibrium)")
-    parser.add_argument("--standup", choices=["none", "scripted"], default="none",
-                        help="Forwarded to run_policy.py --standup")
+    parser.add_argument("--standup", choices=["none", "scripted", "learned"], default="none",
+                        help="Forwarded to run_policy.py --standup (learned: seated route to A'/A'_p, the "
+                             "stand-up policy, success hold, handoff to --policy)")
+    parser.add_argument("--standup-model", type=Path,
+                        help="Forwarded to run_policy.py --standup-model (stand-up policy.onnx + contract.yaml)")
     parser.add_argument("--standup-stop-at", choices=["handoff", "A"], default="handoff",
                         help="Forwarded to run_policy.py --standup-stop-at (A: seated route P0-P3 then hold)")
     parser.add_argument("--force_action_scale", type=float,
@@ -79,8 +82,10 @@ def main() -> None:
         parser.error("positive timeout/fps and an existing schedule are required")
     if args.start == "gantry" and args.controller_command:
         parser.error("gantry release requires the policy controller CSV")
-    if args.start == "seated" and (args.controller_command or args.standup != "scripted"):
-        parser.error("seated start requires the policy controller with --standup scripted")
+    if args.start == "seated" and (args.controller_command or args.standup not in ("scripted", "learned")):
+        parser.error("seated start requires the policy controller with --standup scripted or learned")
+    if args.standup_model is not None and args.standup != "learned":
+        parser.error("--standup-model requires --standup learned")
     if args.force_action_scale is not None and (
             not np.isfinite(args.force_action_scale) or args.force_action_scale <= 0 or args.controller_command):
         parser.error("force_action_scale must be positive/finite and requires the policy controller")
@@ -114,6 +119,8 @@ def main() -> None:
         "--schedule", str(args.schedule.resolve()), "--timeout", str(args.timeout),
         "--csv", str(controller_csv), "--height_scan", args.height_scan, "--standup", args.standup,
         "--standup-stop-at", args.standup_stop_at]
+    if args.standup_model is not None and not args.controller_command:
+        command += ["--standup-model", str(args.standup_model.resolve())]
     if args.force_action_scale is not None:
         command[1:2] = [str(SIM / "scripts/debug_policy.py"), str(args.force_action_scale)]
     core = SimCore(build(args.terrain, scan_path), str(SIM), headless=True)

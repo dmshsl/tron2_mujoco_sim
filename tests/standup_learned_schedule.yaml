@@ -1,0 +1,5 @@
+# Learned stand-up chain (standup_chain.py): stand 3 s, vx 0.3 m/s for 5 s, stop.
+# Times count from the end of the 3 s preparation after the stand-up handoff.
+- [0.0, 0.0, 0.0, 0.0]
+- [3.0, 0.3, 0.0, 0.0]
+- [8.0, 0.0, 0.0, 0.0]
