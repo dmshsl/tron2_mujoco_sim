@@ -73,6 +73,7 @@ def test_nonzero_exit_or_missing_csv_is_a_crash(tmp_path):
 
 @pytest.mark.parametrize("arguments,message", [
     (["--start", "seated"], "seated start requires the policy controller with --standup scripted or learned"),
+    (["--start", "a_prime"], "seated start requires the policy controller with --standup scripted or learned"),
     (["--standup", "scripted", "--standup-model", "/tmp"], "--standup-model requires --standup learned"),
 ])
 def test_sim2sim_cli_rejects_bad_standup_wiring(arguments, message):

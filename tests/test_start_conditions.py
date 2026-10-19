@@ -137,6 +137,28 @@ def test_seated_start_held_variant_keeps_the_drawn_pose() -> None:
         seated_draw(3, "elsewhere")
 
 
+def test_a_prime_start_holds_both_legs_at_a_prime_on_the_support_height() -> None:
+    from tron2_sim.start_conditions import a_prime_pose, seated_start
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tron2_common"))
+    from tron2_common.kinematics import NAMES, support_height
+    from tron2_common.seated_route import A_PRIME
+
+    np.testing.assert_allclose(a_prime_pose(5), A_PRIME)
+    noisy = a_prime_pose(5, 3.)
+    assert 0. < np.max(np.abs(noisy - A_PRIME)) <= np.radians(3.) + 1e-12
+    np.testing.assert_array_equal(a_prime_pose(5, 3.), noisy)  # seeded
+    model = mujoco.MjModel.from_xml_path(str(materialize()))
+    load_terrain(model, "flat")
+    data = mujoco.MjData(model)
+    mujoco.mj_resetDataKeyframe(model, data, 0)
+    info = seated_start(model, data, 5, settle_s=0., pose=noisy)
+    assert info["settle_steps"] == 0 and info["tilt"] == 0.
+    held = np.array([data.qpos[model.joint(n).qposadr[0]] for n in NAMES])
+    np.testing.assert_allclose(held, noisy)
+    assert data.qpos[2] == pytest.approx(support_height(noisy) + .001, abs=1e-9)
+
+
 def test_contact_labels_name_terrain_contacts_by_body() -> None:
     from tron2_sim.start_conditions import ContactLabels, seated_start
 

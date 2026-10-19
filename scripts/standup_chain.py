@@ -113,12 +113,14 @@ def main() -> int:
     parser.add_argument("--video", action="store_true")
     parser.add_argument("--standup-model", type=Path)
     parser.add_argument("--timeout", type=float, default=60.)
+    parser.add_argument("--start", choices=("seated", "a_prime"), default="seated",
+                        help="seated: limp heap + seated route (default); a_prime: held at A'/A' (+-3 deg), no limp heap")
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    stem = f"chain_{args.policy}_seed{args.seed}"
+    stem = f"chain_{args.policy}_seed{args.seed}" if args.start == "seated" else f"chain_{args.policy}_aprime_seed{args.seed}"
     controller_csv = args.out / f"{stem}.csv"
     command = [sys.executable, str(SIM / "scripts/sim2sim.py"), "--variant", "wf_payload", "--terrain", "flat",
-               "--policy", args.policy, "--height_scan", "gt", "--start", "seated", "--seed", str(args.seed),
+               "--policy", args.policy, "--height_scan", "gt", "--start", args.start, "--seed", str(args.seed),
                "--settle", "1.0", "--standup", "learned", "--schedule", str(SCHEDULE),
                "--timeout", str(args.timeout), "--csv", str(controller_csv)]
     if args.video:
@@ -137,7 +139,7 @@ def main() -> int:
                              timeout=args.timeout * 4 + 300)
     log = process.stdout + process.stderr
     (args.out / f"{stem}.log").write_text(log)
-    summary = {"policy": args.policy, "seed": args.seed, "command": command,
+    summary = {"policy": args.policy, "seed": args.seed, "start": args.start, "command": command,
                "video": str(args.out / f"{stem}.mp4") if args.video else None,
                **summarize(log, controller_csv, controller_csv.with_suffix(".sim.csv"), process.returncode)}
     (args.out / f"{stem}.json").write_text(json.dumps(summary, indent=2))

@@ -111,17 +111,29 @@ def seated_draw(seed: int, draw: str = "full") -> npt.NDArray[np.float64]:
     raise ValueError("No nonpenetrating random seated draw within 100000 attempts")
 
 
+def a_prime_pose(seed: int, noise_deg: float = 0.) -> npt.NDArray[np.float64]:
+    """Pose A' (both legs in the roll family, tron2_common.seated_route.A_PRIME, the stand-up's A'/A' training
+    start) plus uniform +-noise_deg per joint drawn from seed."""
+    sys.path.insert(0, str(COMMON))
+    from tron2_common.seated_route import A_PRIME
+
+    rng = np.random.default_rng(seed)
+    return np.asarray(A_PRIME, dtype=np.float64) + rng.uniform(-1., 1., 8) * math.radians(noise_deg)
+
+
 def seated_start(model: mujoco.MjModel, data: mujoco.MjData, seed: int, *, draw: str = "full",
-                 settle_s: float = 1., damping: float = .3) -> dict[str, float]:
+                 settle_s: float = 1., damping: float = .3, pose: npt.NDArray[np.float64] | None = None) -> dict[str, float]:
     """Seat the upright base on its bottom with random in-limit legs, then settle limp
     (position stiffness 0, damping 0.3 N*m*s/rad) for settle_s; wheels are free.
-    settle_s=0 is the diagnostic "held" start: the pose is not a passive equilibrium."""
+    settle_s=0 is the diagnostic "held" start: the pose is not a passive equilibrium.
+    pose: these legs instead of the draw, the base placed at the FK support height (lowest body or wheel point
+    1 mm above the floor, as the Isaac StandUp reset; the a_prime start)."""
     sys.path.insert(0, str(COMMON))
-    from tron2_common.kinematics import BOTTOM, NAMES
+    from tron2_common.kinematics import BOTTOM, NAMES, support_height
 
     if not np.isfinite(settle_s) or settle_s < 0 or damping < 0:
         raise ValueError("settle time and damping must be finite and nonnegative")
-    q = seated_draw(seed, draw)
+    q = seated_draw(seed, draw) if pose is None else np.asarray(pose, dtype=np.float64)
     data.qpos[:7] = [0., 0., model.qpos0[2], 1., 0., 0., 0.]
     for joint in range(model.njnt):
         if model.jnt_type[joint] == mujoco.mjtJoint.mjJNT_HINGE:
@@ -133,7 +145,7 @@ def seated_start(model: mujoco.MjModel, data: mujoco.MjData, seed: int, *, draw:
     data.xfrc_applied[:] = 0.
     mujoco.mj_forward(model, data)
     _move_to_flat_border(model, data)
-    data.qpos[2] = _terrain_height(model, data, data.qpos[:3]) + BOTTOM + .001
+    data.qpos[2] = _terrain_height(model, data, data.qpos[:3]) + (BOTTOM if pose is None else support_height(q)) + .001
     mujoco.mj_forward(model, data)
     dofs = [int(model.joint(name).dofadr[0]) for name in NAMES]
     actuators = [int(model.actuator(name.removesuffix("_Joint")).id) for name in NAMES]

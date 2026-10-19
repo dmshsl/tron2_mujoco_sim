@@ -31,6 +31,7 @@ from tron2_sim.start_conditions import (
     GantrySupport,
     PolicyProgress,
     ground_start,
+    a_prime_pose,
     seated_start,
     wheel_bottoms,
 )
@@ -52,12 +53,14 @@ def main() -> None:
     parser.add_argument("--height_scan", choices=["gt", "perception"], default="gt")
     parser.add_argument("--render_fps", type=float, default=30.0,
                         help="Target rate for the live perception depth renderer (--height_scan perception)")
-    parser.add_argument("--start", choices=["ground", "gantry", "seated"],
+    parser.add_argument("--start", choices=["ground", "gantry", "seated", "a_prime"],
                         help="Default: gantry for a real --policy run (the real-robot-standard start - "
                              "a crane strap holds the robot until the stand-up policy exists, task 23 "
                              "ladder step 1), ground for --controller-command smoke tests; seated = "
                              "random in-limit legs, 1 s limp settle on the base bottom (task 22, "
-                             "pair with --standup scripted or learned)")
+                             "pair with --standup scripted or learned); a_prime = both legs at pose A' "
+                             "(+-3 deg, --seed), base at the FK support height, held (no limp settle) - the "
+                             "learned stand-up's A'/A' training start without the limp heap")
     parser.add_argument("--seed", type=int, default=0, help="Seated start joint draw seed")
     parser.add_argument("--draw", choices=["full", "admissible"], default="full",
                         help="Seated joint draw: full-limit uniform (default) or DESIGN.md's K3 neighbourhood")
@@ -82,7 +85,7 @@ def main() -> None:
         parser.error("positive timeout/fps and an existing schedule are required")
     if args.start == "gantry" and args.controller_command:
         parser.error("gantry release requires the policy controller CSV")
-    if args.start == "seated" and (args.controller_command or args.standup not in ("scripted", "learned")):
+    if args.start in ("seated", "a_prime") and (args.controller_command or args.standup not in ("scripted", "learned")):
         parser.error("seated start requires the policy controller with --standup scripted or learned")
     if args.standup_model is not None and args.standup != "learned":
         parser.error("--standup-model requires --standup learned")
@@ -130,6 +133,9 @@ def main() -> None:
     contract_path = SIM.parent / f"tron2_deploy/controllers/model/WF_TRON2A_{pose_policy.upper()}/contract.yaml"
     if args.start == "seated":
         seated = seated_start(core.model, core.data, args.seed, draw=args.draw, settle_s=args.settle)
+        print(f"SEATED {seated}", flush=True)
+    elif args.start == "a_prime":
+        seated = seated_start(core.model, core.data, args.seed, settle_s=0., pose=a_prime_pose(args.seed, 3.))
         print(f"SEATED {seated}", flush=True)
     else:
         ground_start(core.model, core.data, contract_path)
