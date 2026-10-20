@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import json
+import multiprocessing
 import os
 import queue
 import signal
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+from concurrent.futures import Future, ProcessPoolExecutor
 from pathlib import Path
 
 os.environ.setdefault("MUJOCO_GL", "egl")
@@ -53,14 +55,38 @@ PR_SET_PDEATHSIG = 1
 SPAWN_ACK_S = 1.
 
 
-_EMIT = threading.Lock()
+# Events leave through a bounded queue and one writer thread: the physics loop and the controller's output
+# reader must never block on a full stdout pipe (a GUI that stops reading for a second would otherwise freeze
+# physics and the controller with it - the SDK watchdog is 0.25 s). Overflow drops events, counted.
+_EVENTS: queue.Queue[str] = queue.Queue(maxsize=20000)
+_DROPPED = [0]
+
+
+def _writer() -> None:
+    while (line := _EVENTS.get()) is not None:
+        try:
+            sys.stdout.write(line)
+            if _EVENTS.empty():
+                sys.stdout.flush()
+        except (BrokenPipeError, OSError):
+            return
+
+
+_WRITER = threading.Thread(target=_writer, name="events", daemon=True)
+_WRITER.start()
 
 
 def emit(event: str, **fields) -> None:
     line = json.dumps({"event": event, "t": round(time.monotonic(), 3), **fields}) + "\n"
-    with _EMIT:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+    try:
+        _EVENTS.put_nowait(line)
+    except queue.Full:
+        _DROPPED[0] += 1
+
+
+def flush_events(timeout: float = 2.) -> None:
+    _EVENTS.put(None)
+    _WRITER.join(timeout)
 
 
 def die_with_parent() -> None:
@@ -69,6 +95,17 @@ def die_with_parent() -> None:
         ctypes.CDLL("libc.so.6", use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGTERM)
     except OSError:
         pass
+
+
+def _heap_worker_init(cpus: list[int]) -> None:
+    """Tidy-heap worker: low priority, off the physics/controller cores, dies with the server."""
+    die_with_parent()
+    os.nice(5)
+    if cpus:
+        try:
+            os.sched_setaffinity(0, set(cpus))
+        except OSError:
+            pass
 
 
 def cpu_plan() -> dict[str, list[int]]:
@@ -161,7 +198,13 @@ class Server:
         self.settle_until = 0.
         self.seed = -1
         self.spawn_id = 0
-        self.pending: tuple[int | None, float] | None = None
+        self.pending: tuple[int | None, float, Future | None] | None = None
+        self.model_path = self.core.model_path
+        # The tidy-heap check (offline limp settle + family/CoM test, 0.1-1 s) runs in its own process so the
+        # physics loop keeps its real-time publishing; warmed up now (leg-family grid caches).
+        self.heaps = ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"),
+                                         initializer=_heap_worker_init, initargs=(self.cpus.get("rest", []),))
+        self.heaps.submit(heap.draw_tidy_heap, 0, self.model_path)
         self.live = LiveChannel(args.live)
         self.exit_code = 0
         self.slow = 0
@@ -187,12 +230,15 @@ class Server:
         self.channel.cmd = {key: [0.] * self.channel.n for key in ("q", "dq", "tau", "kp", "kd")}
 
     def request_spawn(self, seed: int | None) -> None:
-        self.pending = (seed, time.monotonic() + SPAWN_ACK_S)
+        future = None if seed is None else self.heaps.submit(heap.draw_tidy_heap, seed, self.model_path)
+        self.pending = (seed, time.monotonic() + SPAWN_ACK_S, future)
 
     def try_spawn(self) -> None:
         """Place the pending heap once the controller is limp (live idle acknowledged), else restart it."""
         assert self.pending is not None
-        seed, deadline = self.pending
+        seed, deadline, future = self.pending
+        if future is not None and not future.done():
+            return
         now = time.monotonic()
         status = self.live.read_status()
         idle = (self.controller is not None and self.controller.poll() is None and status.state == STATE_IDLE
@@ -203,10 +249,17 @@ class Server:
             emit("controller_restart", reason=f"state={status.state} reason={status.reason!r}")
             self.stop_controller()
         self.pending = None
-        self.spawn(seed)
+        q, info = heap.pose1(), {}
+        if future is not None:
+            try:
+                q, attempt, rejected = future.result()
+                info = {"attempt": attempt, "rejected": rejected}
+            except Exception as error:  # never lose the spawn: report and use the raw draw
+                q, info = heap.tidy_pose(seed), {"tidy_error": str(error)}
+        self.spawn(seed, q, info)
 
-    def spawn(self, seed: int | None) -> None:
-        q = heap.pose1() if seed is None else heap.tidy_pose(seed)
+    def spawn(self, seed: int | None, q=None, info: dict | None = None) -> None:
+        q = heap.pose1() if q is None else q
         now = float(self.data.time)
         heap.place(self.model, self.data, q)
         self.data.time = now  # keep the sim clock monotonic for the GT scan and logs
@@ -216,7 +269,7 @@ class Server:
         self.spawn_id += 1
         self.sim_state = shared.SETTLING
         self.settle_until = now + heap.SETTLE_S
-        emit("spawned", seed=self.seed, spawn_id=self.spawn_id, q_deg=np.degrees(q).round(2).tolist())
+        emit("spawned", seed=self.seed, spawn_id=self.spawn_id, q_deg=np.degrees(q).round(2).tolist(), **(info or {}))
 
     def start_controller(self) -> None:
         self.controller = Controller(self.args.live, self.scan_path, self.cpus, self.args.policy)
@@ -331,10 +384,15 @@ class Server:
 
     def close(self) -> None:
         self.stop_controller()
+        workers = list(getattr(self.heaps, "_processes", {}).values())
+        self.heaps.shutdown(wait=False, cancel_futures=True)
+        for worker in workers:
+            worker.terminate()
         self.scan_path.unlink(missing_ok=True)
         self.block.close()
         self.live.close()
-        emit("closed")
+        emit("closed", dropped_events=_DROPPED[0])
+        flush_events()
 
 
 def main() -> int:
