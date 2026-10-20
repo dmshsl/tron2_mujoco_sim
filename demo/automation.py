@@ -15,6 +15,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 
 import numpy as np
+import shared
 from app import MainWindow, tilt_of
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeyEvent
@@ -136,7 +137,8 @@ class Automation:
         w.panel.stand.click()
         latched = lambda: w.status.state == STATE_LATCHED  # noqa: E731
         try:
-            yield (lambda: w.standing() or latched() or w.server_exit is not None, timeout)
+            yield (lambda: w.standing() or latched() or w.server_exit is not None
+                   or (w.sim is not None and w.sim.controller == shared.EXITED), timeout)
         except Timeout:
             return False
         return w.standing()

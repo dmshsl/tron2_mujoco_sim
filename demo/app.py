@@ -343,7 +343,10 @@ class MainWindow(QMainWindow):
                 self.spawn_pending = None
             self.sim = sim
             self.vel_filter += .15 * (np.array([sim.vx, sim.wz]) - self.vel_filter)
-        status = self.link.live.read_status()
+        try:
+            status = self.link.live.read_status()
+        except TimeoutError:  # the controller is mid-record; keep the previous status this frame
+            status = self.status
         if (status.phase, status.state) != (self.status.phase, self.status.state):
             log.info("STATUS phase=%d state=%d reason=%r", status.phase, status.state, status.reason)
         self.status = status
