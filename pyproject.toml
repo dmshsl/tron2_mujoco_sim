@@ -21,6 +21,13 @@ sdk = [
     "limxsdk; platform_machine == 'x86_64'",
     "limxsdk; platform_machine == 'aarch64'",
 ]
+# demo/app.py (presentation GUI): Qt plus the deploy controller's own runtime (run_policy.py imports
+# pydantic and onnxruntime; the experiment scripts pass them with `uv run --with`).
+demo = [
+    "pyside6-essentials>=6.7,<6.9",  # 6.12 frees None on QPainter.setPen(Qt.PenStyle.NoPen) (abort)
+    "pydantic>=2.0",
+    "onnxruntime>=1.17,<1.24",  # 1.24 dropped cp310 wheels
+]
 
 [tool.uv]
 package = false
