@@ -58,3 +58,31 @@ def test_state_block_round_trip(tmp_path: Path) -> None:
     np.testing.assert_array_equal(state.qpos, qpos)
     reader.close()
     writer.close()
+
+
+def test_drift_per_phase_in_the_start_heading_frame() -> None:
+    import drift
+
+    def qpos(x: float, y: float, yaw: float) -> np.ndarray:
+        return np.array([x, y, .02, math.cos(yaw / 2), 0., 0., math.sin(yaw / 2)])
+
+    start = qpos(1., 2., math.pi / 2)  # facing +y: "left" is -x
+    d = drift.delta(drift.pose(start), drift.pose(qpos(.97, 2.04, math.pi / 2 + math.radians(4.))))
+    assert d["fwd"] == pytest_approx(.04) and d["left"] == pytest_approx(.03) and d["xy"] == pytest_approx(.05)
+    assert d["yaw_deg"] == pytest_approx(4.)
+    assert drift.delta(drift.pose(qpos(0, 0, 3.1)), drift.pose(qpos(0, 0, -3.1)))["yaw_deg"] == pytest_approx(
+        math.degrees(2 * math.pi - 6.2), .01)  # wrapped (rounded to 0.01 deg)
+    tracker = drift.DriftTracker(start)
+    for phase, pose in ((0, start), (1, start), (5, qpos(1., 2.01, math.pi / 2)), (6, qpos(.99, 2.02, math.pi / 2))):
+        tracker.sample(phase, pose, 0.)
+    tracker.end_base(qpos(.99, 2.03, math.pi / 2))
+    summary = tracker.summary()
+    assert summary["route"]["fwd"] == pytest_approx(.01) and summary["learned"]["left"] == pytest_approx(.01)
+    assert summary["spawn_to_handoff"]["xy"] == pytest_approx(math.hypot(.01, .02), 1e-3)
+    assert summary["base"]["fwd"] == pytest_approx(.01) and set(summary["phases"]) == {"0-1", "1-5", "5-6"}
+
+
+def pytest_approx(value: float, tol: float = 1e-4):
+    import pytest
+
+    return pytest.approx(value, abs=tol)

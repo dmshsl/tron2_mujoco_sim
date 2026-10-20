@@ -65,7 +65,7 @@
 |---|---|
 | 소환 중 | 자세 배치와 1 s 무력 정착 |
 | 널브러진 상태 | 제어기 대기(SDK 연결, 게인 0). [기립] 가능 |
-| 경로 계획 중... | P0: 측정 자세에서 앉은 경로(seated route)를 계획하고 인증합니다. 별도 프로세스에서 돌며, 예산은 40 s입니다. |
+| 경로 계획 중... | P0: 측정 자세에서 앉은 경로(seated route)를 계획하고 인증합니다. 별도 프로세스에서 돌며 보통 1–1.6 s 걸립니다(예산 40 s). |
 | 다리 정리 | P0 유지, P1 첫 다리 들기, P2 공중에서 A_air로, P3 A'로 내리기 |
 | 초기자세 A' | HOLD: A'에 정착 |
 | 기립 | 학습 기립 정책(phase 5) |
@@ -100,14 +100,31 @@ cd ~/tron2_ws/src/tron2/tron2_sim
 demo/launch.sh --selftest            # 버튼/키를 자동으로 누르고 창을 녹화 (60-90 s)
                                      # -> artifacts/basecampaign/demo/demo_selftest.mp4 (+ 단계별 PNG)
 demo/launch.sh --batch 30 --seed 1000  # 30 x (소환 -> 기립 -> 10 s 스크립트 주행), reliability.jsonl
+# 창 없이 같은 sim server + 제어기로 (--standup-model 로 후보 모델 시험 가능)
+uv run --extra sdk --extra demo python demo/headless_batch.py --runs 30 --seed 1000 --out <dir> [--drive]
+# 경로만 오프라인으로(실시간보다 빠름): 단계별 base 이동/heading
+uv run python demo/route_replay.py --seeds 1000-1029 [--no-brake]
 ```
+
+- batch 기록(`reliability.jsonl`, `runs.jsonl`)에는 단계별 base 이동이 들어갑니다(`demo/drift.py`).
+  - `route`: [기립] → 학습 기립 시작(경로 P0–HOLD)
+  - `learned`: 학습 기립 → 인계
+  - `spawn_to_handoff`: [기립] → 인계
+  - `base`: 인계 후 3 s
+  - 값은 xy(m), 시작 heading 기준 앞/왼쪽(m), heading 변화(°)입니다.
+- 함께 기록하는 값
+  - `plan_wait_s`: [기립] → 경로 인증 도착
+  - `route.plan_s`: 계획 워커 계산 시간
+  - `a_prime_s`: [기립] → A' 도착
 
 ## 알려진 한계
 
 - 학습 기립 정책은 A'/A' 시작만 학습했습니다.
   - 그래서 경로가 두 다리를 모두 A'(roll family)로 보내도록 우선합니다(`tron2_common.seated_route.PREFERRED_FAMILY`).
   - 다리가 pitch family(A'_p)에만 닿을 수 있는 자세는 혼합 시작이 되고, 실패 가능성이 큽니다(round 4: 0/5).
-- 경로 계획기는 일부 널브러진 자세를 거부합니다. 이 경우 제어기가 "안전 정지"로 끝나고 로봇은 움직이지 않습니다.
+- 학습 기립은 아직 제자리가 아닙니다. 설치된 정책(round 4)은 A'에서 바퀴를 굴려 일어서므로 인계까지 오른쪽으로 약 1.6 m 이동합니다(.omo/evidence/standup-inplace.md).
+- 경로 중에는 다리를 옮길 때 hip housing 이 바닥을 굴러 몸이 3–10° 돕니다. 바퀴는 제자리에 묶어 둡니다(브레이크).
+- 소환은 경로 계획기의 첫 시도가 성공하는 heap 만 씁니다(`heap.plannable`). 그래도 실제 정착 자세가 조금 달라 계획기가 거부할 수 있습니다. 이 경우 제어기가 "안전 정지"로 끝나고 로봇은 움직이지 않습니다.
   - 넘어짐이 예측되는 자세: CoM이 base 면 뒤로 1 cm 넘게 나가는 경우
   - 40 s 계획 예산 초과
   - 이때는 [소환]을 다시 누르면 됩니다.

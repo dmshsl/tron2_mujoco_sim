@@ -8,7 +8,8 @@ it is in the roll family, the family whose end pose A' the learned stand-up was 
 a person who lays the robot down neatly leaves it sitting on its base with both legs on the roll side:
   * both legs reach the roll family (A') with the thigh kept raised (tron2_common.leg_family), and
   * the CoM is over the base face, at most TIDY_COM_BEHIND behind its edge (the seated route rejects a CoM
-    more than 1 cm behind the base face while a leg is airborne as a predicted tip-over).
+    more than 1 cm behind the base face while a leg is airborne as a predicted tip-over), and
+  * the seated route's first planner attempt finds a route (plannable; standup-inplace).
 Measured over 200 draws (seeds 0-199): 186 plan; the 14 rejects are 11 "CoM > 1 cm behind the base face"
 heaps (both thighs toppled backwards), 2 no-route and 1 over the 40 s budget; 2 more plan to a mixed family.
 With the check: 180 kept, 1 reject (no route), 2 mixed -> excluded by the family rule.
@@ -111,7 +112,25 @@ def tidy_check(q: npt.NDArray[np.float64]) -> str | None:
     margin = support_margin((leg_state(clamped[:4], "L"), leg_state(clamped[4:], "R")))
     if margin < -TIDY_COM_BEHIND:
         return f"CoM {-margin:.3f} m behind the base face"
+    if not plannable(clamped):
+        return "no strict seated route (first planner attempt)"
     return None
+
+
+def plannable(q: npt.NDArray[np.float64]) -> bool:
+    """The seated route's first attempt (strict support limits, RRT seed 0, either leg order) finds a route: the
+    plan at [기립] then succeeds on that same first attempt (~1 s) instead of exhausting its seeds and fallbacks on a
+    heap without a route (seed 1024 of the demo batch: 34 s, then "no route")."""
+    from tron2_common import seated_route
+    from tron2_common.safety import UnsafeReference
+
+    try:
+        q0c, _ = seated_route.admit(q)
+        families = seated_route.leg_families(q0c, fallback=True)
+    except UnsafeReference:
+        return False
+    return any(seated_route._stages(q0c, first, seated_route.SEEDS[0], families, seated_route.STRICT) is not None
+               for first in seated_route._orders(q0c, families))
 
 
 _MODEL: list[mujoco.MjModel] = []

@@ -122,7 +122,8 @@ def cpu_plan() -> dict[str, list[int]]:
 class Controller:
     """One run_policy.py process in its own session (process group)."""
 
-    def __init__(self, live_path: Path, scan_path: Path, cpus: dict[str, list[int]], policy: str) -> None:
+    def __init__(self, live_path: Path, scan_path: Path, cpus: dict[str, list[int]], policy: str,
+                 standup_model: Path | None = None) -> None:
         env = dict(os.environ)
         env["PYTHONPATH"] = str(SIM) + os.pathsep + env.get("PYTHONPATH", "")
         env["ROBOT_IP"] = "127.0.0.1"
@@ -132,7 +133,7 @@ class Controller:
             env["TRON2_PLANNER_CPUS"] = ",".join(str(cpu) for cpu in cpus["rest"])
         command = [sys.executable, "-u", str(RUN_POLICY), "--policy", policy, "--robot_ip", "127.0.0.1",
                    "--height_scan", "gt", "--standup", "learned", "--live-commands", str(live_path),
-                   "--timeout", "86400"]
+                   "--timeout", "86400"] + ([] if standup_model is None else ["--standup-model", str(standup_model)])
         self.process = subprocess.Popen(command, cwd=SIM, env=env, start_new_session=True, preexec_fn=die_with_parent,
                                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                         text=True, bufsize=1)
@@ -272,7 +273,8 @@ class Server:
         emit("spawned", seed=self.seed, spawn_id=self.spawn_id, q_deg=np.degrees(q).round(2).tolist(), **(info or {}))
 
     def start_controller(self) -> None:
-        self.controller = Controller(self.args.live, self.scan_path, self.cpus, self.args.policy)
+        self.controller = Controller(self.args.live, self.scan_path, self.cpus, self.args.policy,
+                                     self.args.standup_model)
         self.exit_code = 0
 
     def handle(self, request: dict) -> None:
@@ -402,6 +404,7 @@ def main() -> int:
     parser.add_argument("--live", type=Path, required=True, help="live command file (created by the GUI)")
     parser.add_argument("--state", type=Path, required=True, help="state block file to create")
     parser.add_argument("--policy", choices=("base", "base_blind"), default="base")
+    parser.add_argument("--standup-model", type=Path, default=None, help="stand-up model dir (default: installed)")
     args = parser.parse_args()
     def interrupt(*_: object) -> None:
         raise KeyboardInterrupt

@@ -29,6 +29,7 @@ for path in (SIM.parent, SIM, DEMO):
         sys.path.insert(0, str(path))
 
 import limits as limits_module  # noqa: E402
+from drift import DriftTracker  # noqa: E402
 import numpy as np  # noqa: E402
 import shared  # noqa: E402
 from panel import ControlPanel  # noqa: E402
@@ -63,7 +64,7 @@ def tilt_of(qpos: np.ndarray) -> float:
 class SimLink:
     """The sim server process, its event stream, the state block and the live command file."""
 
-    def __init__(self, policy: str) -> None:
+    def __init__(self, policy: str, standup_model: Path | None = None) -> None:
         scratch = Path("/dev/shm") if Path("/dev/shm").is_dir() else Path("/tmp")
         self.live_path = scratch / f"tron2-demo-live-{os.getpid()}.bin"
         self.state_path = scratch / f"tron2-demo-state-{os.getpid()}.bin"
@@ -72,7 +73,8 @@ class SimLink:
         self.block: shared.StateBlock | None = None
         self.controller_pid: int | None = None
         command = [sys.executable, "-u", str(DEMO / "sim_server.py"), "--live", str(self.live_path),
-                   "--state", str(self.state_path), "--policy", policy]
+                   "--state", str(self.state_path), "--policy", policy] + (
+                       [] if standup_model is None else ["--standup-model", str(standup_model)])
         from sim_server import die_with_parent
 
         self.process = subprocess.Popen(command, cwd=SIM, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -216,7 +218,8 @@ class MainWindow(QMainWindow):
         self.mode = MODE_RUN
         self.planned, self.handoff_seen = False, None
         self.run = {"seed": self.sim.seed if self.sim else None, "pressed": time.monotonic(), "phase_t": {},
-                    "route": None, "latch": None, "handoff": None, "success": None}
+                    "route": None, "latch": None, "handoff": None, "success": None, "plan_wait_s": None,
+                    "drift": DriftTracker(self.sim.qpos) if self.sim is not None else None}
         log.info("STANDUP token=%d seed=%s", self.token, self.run["seed"])
         self.write_command()
 
@@ -288,10 +291,11 @@ class MainWindow(QMainWindow):
             if line.startswith("ROUTE_INFO"):
                 self.planned = True
                 if self.run is not None:
+                    self.run["plan_wait_s"] = round(time.monotonic() - self.run["pressed"], 3)
                     try:
                         info = json.loads(line.split(" ", 1)[1])
                         self.run["route"] = {k: info.get(k) for k in ("families", "duration_s", "order",
-                                                                      "contact_fallback")}
+                                                                      "contact_fallback", "plan_s")}
                     except (IndexError, ValueError):
                         pass
             elif "DAMPING_LATCH" in line and self.run is not None and self.run["latch"] is None:
@@ -367,6 +371,9 @@ class MainWindow(QMainWindow):
         if (status.phase, status.state) != (self.status.phase, self.status.state):
             log.info("STATUS phase=%d state=%d reason=%r", status.phase, status.state, status.reason)
         self.status = status
+        tracker = self.run.get("drift") if self.run is not None else None
+        if tracker is not None and sim is not None and status.state == STATE_RUNNING and self.mode == MODE_RUN:
+            tracker.sample(status.phase, sim.qpos, time.monotonic() - self.run["pressed"])
         self.update_phase()
         driving = self.can_drive()
         self.viewport.hud = {"phase": self.ui_phase, "color": self.ui_color, "detail": self.ui_detail,

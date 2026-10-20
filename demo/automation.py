@@ -16,7 +16,8 @@ from pathlib import Path
 
 import numpy as np
 import shared
-from app import MainWindow, tilt_of
+from app import HANDOFF_LABEL_S, MainWindow, tilt_of
+from drift import BASE_SECONDS
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
@@ -243,12 +244,19 @@ class Automation:
         stood = yield from self.stand()
         foreign += foreign_sdk_processes()
         run = w.run or {}
-        record.update(phase_t=run.get("phase_t"), route=run.get("route"), latch=w.status.reason or None)
+        record.update(phase_t=run.get("phase_t"), route=run.get("route"), latch=w.status.reason or None,
+                      plan_wait_s=run.get("plan_wait_s"), handoff_s=run.get("handoff"),
+                      a_prime_s=(run.get("phase_t") or {}).get("초기자세 A'"))
+        tracker = run.get("drift")
         if not stood:
             record.update(outcome="fail_standup", phase=w.ui_phase, reason=w.status.reason or w.ui_phase,
-                          interference=foreign)
+                          interference=foreign, drift=tracker.summary() if tracker is not None else None)
             return record
-        yield 1.
+        # "서 있음" shows HANDOFF_LABEL_S after the hand-off: the Base settle is BASE_SECONDS from the hand-off
+        yield max(.1, BASE_SECONDS - HANDOFF_LABEL_S)
+        if tracker is not None and w.sim is not None:
+            tracker.end_base(w.sim.qpos)
+            record["drift"] = tracker.summary()
         drive = yield from self.drive(DRIVE_10S)
         foreign += foreign_sdk_processes()
         ok = not drive["latched"] and drive["final_tilt"] is not None and drive["final_tilt"] < .5 \
@@ -260,10 +268,11 @@ class Automation:
     def _save(self, path: Path, results: list) -> None:
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in results))
         good = sum(r.get("outcome") == "stood_and_drove" for r in results)
+        from headless_batch import summarize
         (path.parent / "reliability_summary.json").write_text(json.dumps(
             {"runs": len(results), "stood_and_drove": good,
-             "outcomes": {o: sum(r.get("outcome") == o for r in results) for o in {r.get("outcome") for r in results}}},
-            indent=2))
+             "outcomes": {o: sum(r.get("outcome") == o for r in results) for o in {r.get("outcome") for r in results}},
+             "metrics": summarize(results)}, indent=2, ensure_ascii=False))
 
     def selftest(self) -> Generator[Wait, None, None]:
         from recorder import WindowRecorder
