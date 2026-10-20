@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 # sim_state
-BOOT, SETTLING, HEAP, ACTIVE = 0, 1, 2, 3
+BOOT, SETTLING, HEAP, ACTIVE, SUSPENDED = 0, 1, 2, 3, 4
 # controller
 NONE, STARTING, RUNNING, EXITED = 0, 1, 2, 3
 

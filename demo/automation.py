@@ -8,16 +8,17 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import subprocess
 import time
 from collections.abc import Callable, Generator
 from pathlib import Path
 
 import numpy as np
+from app import MainWindow, tilt_of
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
-
-from app import MainWindow, tilt_of
 from tron2_deploy.live_commands import STATE_LATCHED
 
 log = logging.getLogger("tron2_demo.auto")
@@ -37,6 +38,29 @@ class Timeout(Exception):
     pass
 
 
+class Interference(Exception):
+    pass
+
+
+def foreign_sdk_processes() -> list[str]:
+    """Other limxsdk loopback users on this host (sim2sim / run_policy not started by this app). The loopback
+    ports are fixed, so their packets reach our controller and ours reach theirs: such runs are not valid."""
+    probe = subprocess.run(["pgrep", "-af", r"scripts/sim2sim\.py|tron2_deploy/run_policy\.py|seated_route_eval"],
+                           capture_output=True, text=True, check=False)
+    own = str(os.getpid())
+    found = []
+    for line in probe.stdout.splitlines():
+        parts = line.split()
+        # only the python processes themselves (not shells, greps or editors whose command line names them)
+        if len(parts) < 3 or not os.path.basename(parts[1]).startswith("python") or parts[0] == own:
+            continue
+        scripts = ("scripts/sim2sim.py", "tron2_deploy/run_policy.py", "seated_route_eval.py")
+        if "--live-commands" in line or not any(p.endswith(scripts) for p in parts[2:4]):
+            continue
+        found.append(line)
+    return found
+
+
 class Automation:
     def __init__(self, window: MainWindow, args) -> None:
         self.window, self.args = window, args
@@ -46,6 +70,9 @@ class Automation:
         self.wait: tuple[Callable[[], bool], float, float] | None = None
         self.timer = QTimer(window, timeout=self.step)
         self.rng = np.random.default_rng(args.seed)
+        self.guard = bool(args.batch)  # batch: suspend the sim while another limxsdk user runs
+        self.suspended = False
+        self.next_probe = 0.
 
     def start(self) -> None:
         self.timer.start(50)
@@ -53,15 +80,27 @@ class Automation:
     # ------------------------------------------------------------------ driver
     def step(self) -> None:
         try:
-            if self.wait is not None:
+            request = None
+            if self.guard and not self.suspended and time.monotonic() >= self.next_probe:
+                self.next_probe = time.monotonic() + .5
+                foreign = foreign_sdk_processes()
+                if foreign:
+                    self.suspended = True
+                    self.window.link.send(cmd="suspend")
+                    log.warning("foreign limxsdk users, sim suspended: %s", foreign)
+                    self.wait = None
+                    request = self.generator.throw(Interference("; ".join(foreign)))
+            if request is None and self.wait is not None:
                 predicate, deadline, _ = self.wait
                 if not predicate():
-                    if time.monotonic() > deadline:
-                        self.wait = None
-                        self.generator.throw(Timeout())
-                    return
-                self.wait = None
-            request = next(self.generator)
+                    if time.monotonic() <= deadline:
+                        return
+                    self.wait = None
+                    request = self.generator.throw(Timeout())
+                else:
+                    self.wait = None
+            if request is None:
+                request = next(self.generator)
             if isinstance(request, (int, float)):
                 until = time.monotonic() + float(request)
                 self.wait = (lambda: time.monotonic() >= until, until + 1., 0.)
@@ -141,39 +180,80 @@ class Automation:
         out.mkdir(parents=True, exist_ok=True)
         results_path = out / "reliability.jsonl"
         results = []
-        yield from self.wait_idle(120.)
-        for index in range(count):
+        index = 0
+        ready = False
+        while index < count:
             seed = self.seed(index)
-            record = {"run": index, "seed": seed, "started": time.strftime("%H:%M:%S")}
-            w.spawn(seed)
             try:
-                yield (lambda: w.spawn_pending is None, 15.)
-                yield from self.wait_idle(60.)
+                if not ready:
+                    yield from self.wait_idle(120.)
+                    ready = True
+                record = yield from self.cycle(index, seed)
+            except Interference as error:
+                ready = False
+                if index or w.run is not None:
+                    record = {"run": index, "seed": seed, "outcome": "invalid_interference",
+                              "foreign": str(error)[:2000], "phase": w.ui_phase, "at": time.strftime("%H:%M:%S")}
+                    with (out / "reliability_invalid.jsonl").open("a") as stream:
+                        stream.write(json.dumps(record, ensure_ascii=False) + "\n")
+                log.warning("BATCH run %d seed %d: foreign limxsdk process, waiting and repeating", index, seed)
+                while True:
+                    try:
+                        yield from self.recover()
+                        break
+                    except Interference:  # it came back while resuming
+                        continue
+                continue
             except Timeout:
-                record.update(outcome="fail_spawn", reason="controller not idle after spawn")
-                results.append(record)
-                self._save(results_path, results)
-                continue
-            yield .5
-            stood = yield from self.stand()
-            run = w.run or {}
-            record.update(phase_t=run.get("phase_t"), route=run.get("route"), latch=w.status.reason or None)
-            if not stood:
-                record.update(outcome="fail_standup", phase=w.ui_phase, reason=w.status.reason or w.ui_phase)
-                results.append(record)
-                self._save(results_path, results)
-                log.info("BATCH run %d seed %d: %s", index, seed, record["outcome"])
-                continue
-            yield 1.
-            drive = yield from self.drive(DRIVE_10S)
-            ok = not drive["latched"] and drive["final_tilt"] is not None and drive["final_tilt"] < .5 \
-                and drive["final_z"] > .3 and drive["path_m"] > 1.
-            record.update(drive=drive, outcome="stood_and_drove" if ok else "fail_drive",
-                          latch=w.status.reason or None)
+                record = {"run": index, "seed": seed, "outcome": "fail_timeout", "phase": w.ui_phase}
+                ready = False
             results.append(record)
             self._save(results_path, results)
-            log.info("BATCH run %d seed %d: %s path %.2f m", index, seed, record["outcome"], drive["path_m"])
+            log.info("BATCH run %d seed %d: %s", index, seed, record["outcome"])
+            index += 1
         self.exit_code = 0
+
+    def recover(self) -> Generator[Wait, None, None]:
+        """Wait until no other limxsdk user has run for 5 s, then resume the sim (pose-1 heap, fresh controller)."""
+        while True:
+            yield (lambda: not foreign_sdk_processes(), 7200.)
+            yield 5.
+            if not foreign_sdk_processes():
+                break
+        self.suspended = False
+        self.window.link.send(cmd="resume")
+        yield 2.
+
+    def cycle(self, index: int, seed: int) -> Generator[Wait, None, dict]:
+        """One reliability run: spawn -> stand up -> 10 s scripted drive."""
+        w = self.window
+        record = {"run": index, "seed": seed, "started": time.strftime("%H:%M:%S")}
+        foreign: list[str] = []
+        w.spawn(seed)
+        try:
+            yield (lambda: w.spawn_pending is None, 15.)
+            yield from self.wait_idle(60.)
+        except Timeout:
+            record.update(outcome="fail_spawn", reason="controller not idle after spawn")
+            return record
+        yield .5
+        foreign += foreign_sdk_processes()
+        stood = yield from self.stand()
+        foreign += foreign_sdk_processes()
+        run = w.run or {}
+        record.update(phase_t=run.get("phase_t"), route=run.get("route"), latch=w.status.reason or None)
+        if not stood:
+            record.update(outcome="fail_standup", phase=w.ui_phase, reason=w.status.reason or w.ui_phase,
+                          interference=foreign)
+            return record
+        yield 1.
+        drive = yield from self.drive(DRIVE_10S)
+        foreign += foreign_sdk_processes()
+        ok = not drive["latched"] and drive["final_tilt"] is not None and drive["final_tilt"] < .5 \
+            and drive["final_z"] > .3 and drive["path_m"] > 1.
+        record.update(drive=drive, outcome="stood_and_drove" if ok else "fail_drive", latch=w.status.reason or None,
+                      interference=foreign)
+        return record
 
     def _save(self, path: Path, results: list) -> None:
         path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in results))

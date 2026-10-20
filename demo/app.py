@@ -28,14 +28,13 @@ for path in (SIM.parent, SIM, DEMO):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+import limits as limits_module  # noqa: E402
 import numpy as np  # noqa: E402
+import shared  # noqa: E402
+from panel import ControlPanel  # noqa: E402
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer  # noqa: E402
 from PySide6.QtGui import QFont, QFontDatabase, QIcon, QKeyEvent  # noqa: E402
 from PySide6.QtWidgets import QApplication, QMainWindow  # noqa: E402
-
-import limits as limits_module  # noqa: E402
-import shared  # noqa: E402
-from panel import ControlPanel  # noqa: E402
 from tron2_deploy.live_commands import (  # noqa: E402
     MODE_IDLE,
     MODE_RUN,
@@ -139,7 +138,7 @@ class KeyFilter(QObject):
         super().__init__(window)
         self.window = window
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() in (QEvent.Type.KeyPress, QEvent.Type.ShortcutOverride) and isinstance(event, QKeyEvent) \
                 and event.key() in self.KEYS:
             if event.type() == QEvent.Type.KeyPress and not event.isAutoRepeat():
@@ -293,6 +292,8 @@ class MainWindow(QMainWindow):
         detail = ""
         if self.server_exit is not None:
             phase, color, detail = "시뮬레이터 종료됨", COLORS["bad"], f"exit {self.server_exit} (로그 확인)"
+        elif sim is not None and sim.sim_state == shared.SUSPENDED:
+            phase, color, detail = "일시 정지", COLORS["wait"], "다른 limxsdk 시뮬레이터가 실행 중 (포트 공유)"
         elif sim is None or sim.sim_state == shared.BOOT:
             phase, color = "시뮬레이터 준비 중", COLORS["wait"]
         elif self.spawn_pending is not None or sim.sim_state == shared.SETTLING:
@@ -355,7 +356,7 @@ class MainWindow(QMainWindow):
         self.panel.refresh(self)
 
     # ------------------------------------------------------------------ shutdown
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def closeEvent(self, event) -> None:
         if not self.closing:
             self.closing = True
             log.info("closing")

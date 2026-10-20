@@ -61,7 +61,8 @@ def load(path: Path = DEFAULT_PATH) -> Limits:
     for axis in ("vx", "wz"):
         values[f"{axis}_step"] = _find(tree, (f"{axis}_step", f"step_{axis}"), ("step", "steps"), axis) or getattr(
             defaults, f"{axis}_step")
-        cap = _find(tree, (f"cap_{axis}", f"{axis}_cap", f"{axis}_cap_default", f"default_cap_{axis}", f"software_cap_{axis}"),
+        cap = _find(tree, (f"cap_{axis}", f"{axis}_cap", f"{axis}_cap_default", f"default_cap_{axis}",
+                           f"software_cap_{axis}"),
                     ("cap", "software_cap", "default_cap", "default_software_cap"), axis)
         maximum = _find(tree, (f"max_{axis}", f"{axis}_max", f"trained_max_{axis}"),
                         ("max", "trained_max", "hardware_max", "limits", "trained"), axis)

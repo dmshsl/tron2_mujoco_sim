@@ -11,8 +11,10 @@ Spawn/reset: the GUI first puts the controller in live idle (limp). Once the con
 heap is placed (demo/heap.py) and settles limp for 1 s in real time; the same controller process is kept for
 the next stand-up. A controller that latched, exited or does not acknowledge idle within SPAWN_ACK_S is
 stopped (process group SIGTERM -> SIGKILL, so its planner worker goes too) and a fresh one starts in live
-idle after the settle. Physics keeps running (and publishing) throughout: the SDK watchdog is 0.25 s. Whenever no controller commands the joints (none running, or it
-publishes zero gains) the sim applies the limp joint damping of the heap settle.
+idle after the settle. Physics keeps running (and publishing) throughout: the SDK watchdog is 0.25 s.
+Whenever no controller commands the joints (none running, or it publishes zero gains) the sim applies the
+limp joint damping of the heap settle. "suspend" (another limxsdk loopback user appeared) stops the controller
+and all SDK traffic until "resume".
 """
 from __future__ import annotations
 
@@ -35,15 +37,15 @@ for path in (SIM.parent, SIM, DEMO):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
+import heap  # noqa: E402
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
-
-import heap  # noqa: E402
 import shared  # noqa: E402
 from model import physics_xml  # noqa: E402
+from tron2_deploy.live_commands import STATE_IDLE, LiveChannel  # noqa: E402
+
 from tron2_sim.core import SimCore  # noqa: E402
 from tron2_sim.spec import IMU_STD, LEG_WF, ChannelSpec, RobotSpec  # noqa: E402
-from tron2_deploy.live_commands import STATE_IDLE, LiveChannel  # noqa: E402
 from tron2_sim.variants.wf_payload import PayloadTerrain  # noqa: E402
 
 RUN_POLICY = SIM.parent / "tron2_deploy/run_policy.py"
@@ -226,6 +228,15 @@ class Server:
             self.request_spawn(int(request.get("seed", np.random.SeedSequence().entropy % 1_000_000)))
         elif command == "reset":
             self.request_spawn(None)
+        elif command == "suspend":  # another limxsdk loopback user appeared: no controller, no SDK traffic
+            self.pending = None
+            self.stop_controller()
+            self.sim_state = shared.SUSPENDED
+            emit("suspended")
+        elif command == "resume":
+            if self.sim_state == shared.SUSPENDED:
+                emit("resumed")
+                self.spawn(None)
         elif command == "quit":
             self.running = False
         else:
@@ -234,7 +245,8 @@ class Server:
     # ---------------------------------------------------------------- physics
     def tick(self) -> None:
         cmd = self.channel.cmd
-        commanded = self.sim_state == shared.ACTIVE and self.controller is not None and (any(cmd["kp"]) or any(cmd["kd"]))
+        commanded = (self.sim_state == shared.ACTIVE and self.controller is not None
+                     and (any(cmd["kp"]) or any(cmd["kd"])))
         if commanded:
             self.channel.compute_ctrl(self.data)
         else:
@@ -292,6 +304,11 @@ class Server:
                     self.exit_code = code if code else -999
                     self.controller = None
                     self.channel.cmd = {key: [0.] * self.channel.n for key in ("q", "dq", "tau", "kp", "kd")}
+            if self.sim_state == shared.SUSPENDED:
+                self.publish_gui(0.)
+                time.sleep(.01)
+                anchor_wall, anchor_sim = time.monotonic(), float(self.data.time)
+                continue
             ahead = anchor_sim + (time.monotonic() - anchor_wall) - float(self.data.time)
             if ahead < 0:
                 time.sleep(min(-ahead, .002))

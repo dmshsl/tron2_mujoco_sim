@@ -4,6 +4,8 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
+import shared
+from limits import Limits
 from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
@@ -19,9 +21,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-import shared
-from limits import Limits
 
 if TYPE_CHECKING:
     from app import MainWindow
@@ -71,7 +70,7 @@ class SpeedBar(QWidget):
         self.command, self.actual, self.cap, self.scale = command, actual, cap, max(scale, 1e-3)
         self.update()
 
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         w, h = self.width(), self.height()
@@ -151,7 +150,8 @@ class ControlPanel:
         pad_box.addLayout(pad)
         pad_box.addStretch()
         layout.addLayout(pad_box)
-        hint = QLabel(f"▲/▼ 전후진 ±{limits.vx_step:g} m/s · ◀/▶ 좌/우회전 ±{limits.wz_step:g} rad/s (누를 때마다 누적)")
+        hint = QLabel(f"▲/▼ 전후진 ±{limits.vx_step:g} m/s · ◀/▶ 좌/우회전 ±{limits.wz_step:g} rad/s "
+                      "(누를 때마다 누적)")
         hint.setObjectName("small")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -162,7 +162,8 @@ class ControlPanel:
         for label, bar in ((self.vx_label, self.vx_bar), (self.wz_label, self.wz_bar)):
             layout.addWidget(label)
             layout.addWidget(bar)
-        legend = QLabel("주황 표식 = 명령, 파란 막대 = 실제, 회색 선 = 상한 · 정책 = 배포 제어기의 명령 정형(상한·가속 제한) 후 값")
+        legend = QLabel("주황 표식 = 명령, 파란 막대 = 실제, 회색 선 = 상한 · "
+                        "정책 = 배포 제어기의 명령 정형(상한·가속 제한) 후 값")
         legend.setWordWrap(True)
         legend.setObjectName("small")
         layout.addWidget(legend)
@@ -216,7 +217,8 @@ class ControlPanel:
         slider.setSingleStep(5)
         slider.setPageStep(25)
         slider.setValue(round(value * 100))
-        slider.valueChanged.connect(lambda _: self.window.set_caps(self.cap_vx.value() / 100, self.cap_wz.value() / 100))
+        slider.valueChanged.connect(
+            lambda _: self.window.set_caps(self.cap_vx.value() / 100, self.cap_wz.value() / 100))
         return slider
 
     def refresh(self, window: MainWindow) -> None:

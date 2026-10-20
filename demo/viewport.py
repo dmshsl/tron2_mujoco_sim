@@ -9,11 +9,10 @@ os.environ.setdefault("MUJOCO_GL", "egl")
 
 import mujoco
 import numpy as np
+from model import view_xml
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
-
-from model import view_xml
 
 DEFAULT_CAMERA = dict(distance=2.6, azimuth=145., elevation=-18.)
 
@@ -48,19 +47,19 @@ class Viewport(QWidget):
         self.camera.distance = DEFAULT_CAMERA["distance"]
         self.camera.azimuth = DEFAULT_CAMERA["azimuth"]
         self.camera.elevation = DEFAULT_CAMERA["elevation"]
-        self.camera.lookat[:] = self.data.qpos[:3] + [0, 0, .15]
+        self.camera.lookat[:] = [*self.data.qpos[:2], self.data.qpos[2] + .15]
         self.follow = True
 
-    def mousePressEvent(self, event) -> None:  # noqa: N802
+    def mousePressEvent(self, event) -> None:
         self.drag = (event.button(), event.position())
 
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+    def mouseReleaseEvent(self, event) -> None:
         self.drag = None
 
-    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+    def mouseDoubleClickEvent(self, event) -> None:
         self.reset_camera()
 
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+    def mouseMoveEvent(self, event) -> None:
         if self.drag is None:
             return
         button, last = self.drag
@@ -79,12 +78,12 @@ class Viewport(QWidget):
             forward = np.array([math.cos(yaw), math.sin(yaw), 0.])
             self.camera.lookat[:] += scale * (-delta.x() * right + delta.y() * forward)
 
-    def wheelEvent(self, event) -> None:  # noqa: N802
+    def wheelEvent(self, event) -> None:
         steps = event.angleDelta().y() / 120.
         self.camera.distance = float(np.clip(self.camera.distance * .9 ** steps, .6, 15.))
 
     # ------------------------------------------------------------------ rendering
-    def resizeEvent(self, event) -> None:  # noqa: N802
+    def resizeEvent(self, event) -> None:
         self.resize_timer.start()
         super().resizeEvent(event)
 
@@ -119,7 +118,7 @@ class Viewport(QWidget):
         self.update()
 
     # ------------------------------------------------------------------ HUD
-    def paintEvent(self, event) -> None:  # noqa: N802
+    def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
@@ -162,7 +161,8 @@ class Viewport(QWidget):
             font = QFont(self.font())
             font.setPixelSize(int(17 * scale))
             painter.setFont(font)
-            lines = [f"vx  명령 {cmd_vx:+.2f}  실제 {act_vx:+.2f} m/s", f"wz  명령 {cmd_wz:+.2f}  실제 {act_wz:+.2f} rad/s"]
+            lines = [f"vx  명령 {cmd_vx:+.2f}  실제 {act_vx:+.2f} m/s",
+                     f"wz  명령 {cmd_wz:+.2f}  실제 {act_wz:+.2f} rad/s"]
             metrics = painter.fontMetrics()
             width = max(metrics.horizontalAdvance(line) for line in lines) + 28 * scale
             height = len(lines) * metrics.height() + 18 * scale

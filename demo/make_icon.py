@@ -14,9 +14,9 @@ for path in (SIM, DEMO):
 
 import mujoco  # noqa: E402
 import numpy as np  # noqa: E402
+from model import physics_xml, view_xml  # noqa: E402
 from PIL import Image, ImageDraw, ImageFilter  # noqa: E402
 
-from model import physics_xml, view_xml  # noqa: E402
 from tron2_sim.start_conditions import ground_start  # noqa: E402
 
 CONTRACT = SIM.parent / "tron2_deploy/controllers/model/WF_TRON2A_BASE/contract.yaml"
