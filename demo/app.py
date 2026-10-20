@@ -70,6 +70,7 @@ class SimLink:
         self.live = LiveChannel(self.live_path, create=True)
         self.events: queue.Queue[dict] = queue.Queue()
         self.block: shared.StateBlock | None = None
+        self.controller_pid: int | None = None
         command = [sys.executable, "-u", str(DEMO / "sim_server.py"), "--live", str(self.live_path),
                    "--state", str(self.state_path), "--policy", policy]
         from sim_server import die_with_parent
@@ -88,6 +89,16 @@ class SimLink:
             except json.JSONDecodeError:
                 self.events.put({"event": "text", "line": line})
         self.events.put({"event": "server_exit", "code": self.process.wait()})
+
+    def reap_controller(self) -> None:
+        """The sim server died without stopping the controller: kill its process group (planner worker too)."""
+        if self.controller_pid:
+            try:
+                os.killpg(self.controller_pid, signal.SIGKILL)
+                log.warning("reaped controller process group %d", self.controller_pid)
+            except (ProcessLookupError, PermissionError):
+                pass
+            self.controller_pid = None
 
     def send(self, **request) -> None:
         if self.process.poll() is None and self.process.stdin is not None:
@@ -122,10 +133,13 @@ class SimLink:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait()
+        if self.process.returncode not in (0, None):
+            self.reap_controller()
         if self.block is not None:
             self.block.close()
         self.live.close()
-        for path in (self.live_path, self.state_path):
+        scan = self.live_path.with_name(f"tron2-demo-gt-{self.process.pid}.bin")  # the server's, if it was killed
+        for path in (self.live_path, self.state_path, scan):
             path.unlink(missing_ok=True)
 
 
@@ -283,8 +297,11 @@ class MainWindow(QMainWindow):
             elif "DAMPING_LATCH" in line and self.run is not None and self.run["latch"] is None:
                 self.run["latch"] = line.split("DAMPING_LATCH:", 1)[1].strip()
             return
+        if kind == "controller_started":
+            self.link.controller_pid = event.get("pid")
         if kind == "server_exit":
             self.server_exit = event.get("code")
+            self.link.reap_controller()
         log.info("SIM %s", json.dumps(event, ensure_ascii=False)[:1500])
 
     def update_phase(self) -> None:

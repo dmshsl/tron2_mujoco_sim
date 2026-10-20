@@ -391,6 +391,8 @@ class Server:
         self.scan_path.unlink(missing_ok=True)
         self.block.close()
         self.live.close()
+        for path in (self.args.state, self.args.live):  # also when the GUI died without cleaning up
+            Path(path).unlink(missing_ok=True)
         emit("closed", dropped_events=_DROPPED[0])
         flush_events()
 
